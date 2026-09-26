@@ -1393,6 +1393,295 @@ class PrinterController
     }
 
     /**
+     * Reporte de caja por SESIÓN (una caja, no todo el turno). Dos tickets con el mismo cuerpo:
+     *   POST /printers/print-reporte-caja   caja ABIERTA — corte en vivo ("Reporte de mi caja")
+     *   POST /printers/print-cierre-caja    caja CERRADA — cierre de esa caja ("Reporte de cierre de caja")
+     * El corte de TODO el turno sigue siendo POST /printers/print-corte-x (sin cambios).
+     *
+     * Body: { printerName, data } o una lista de esos. `data` es la respuesta de GET /shifts/:id/session-report
+     * del POS (station, session, openingCash, expectedCash, closing, methods[], movements{...items[]},
+     * operators[], personalDeclarations[], summary) más:
+     *   restaurante            nombre del restaurante
+     *   textos.apertura|cierre|impreso   fechas YA formateadas por el POS en la hora del restaurante
+     *   movements.items[].hora           idem para cada movimiento
+     * Las fechas vienen formateadas del front a propósito: aquí PHP puede tener otra zona horaria.
+     */
+    public function printReporteCaja(Request $request, Response $response, $args = [])
+    {
+        return $this->printReporteCajaJobs($request, $response, false);
+    }
+
+    public function printCierreCaja(Request $request, Response $response, $args = [])
+    {
+        return $this->printReporteCajaJobs($request, $response, true);
+    }
+
+    private function printReporteCajaJobs(Request $request, Response $response, bool $cerrada)
+    {
+        $etiqueta = $cerrada ? 'Cierre de caja' : 'Reporte de caja';
+        try {
+            $jobs = $request->getParsedBody();
+            if (!is_array($jobs)) {
+                $rawBody = (string) $request->getBody();
+                $jobs = json_decode($rawBody, true);
+            }
+            if (isset($jobs['printerName']) && isset($jobs['data'])) {
+                $jobs = [$jobs];
+            }
+            if (!is_array($jobs)) {
+                $response->getBody()->write(json_encode([
+                    'success' => 0,
+                    'message' => 'El cuerpo debe ser un array JSON válido.'
+                ], JSON_UNESCAPED_UNICODE));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $results = [];
+            foreach ($jobs as $job) {
+                $printerName = $job['printerName'] ?? null;
+                $data = $job['data'] ?? [];
+
+                if (!$printerName) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'Nombre de impresora es requerido',
+                        'printer_name' => $printerName
+                    ];
+                    continue;
+                }
+                if (!is_array($data)) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'El campo data debe ser un objeto',
+                        'printer_name' => $printerName
+                    ];
+                    continue;
+                }
+
+                $printer = null;
+                $printerClosed = false;
+                try {
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
+                    $printer = new Printer($connector);
+                    $printer->initialize();
+
+                    $this->printReporteCajaBody($printer, $data, $cerrada);
+
+                    $printer->feed(3);
+                    $printer->cut();
+                    $printer->close();
+                    $printerClosed = true;
+
+                    $results[] = [
+                        'success' => 1,
+                        'message' => $etiqueta . ' impreso correctamente en ' . $printerName,
+                        'printer_name' => $printerName,
+                        'template' => $cerrada ? 'cierre_caja' : 'reporte_caja',
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
+                } catch (Exception $e) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'Error al imprimir: ' . $e->getMessage(),
+                        'printer_name' => $printerName,
+                        'error_type' => 'general'
+                    ];
+                } finally {
+                    if ($printer && !$printerClosed) {
+                        try {
+                            $printer->close();
+                        } catch (Exception $inner) {
+                        }
+                    }
+                }
+            }
+
+            $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (Exception $e) {
+            $response->getBody()->write(json_encode([
+                'success' => 0,
+                'message' => 'Error al procesar el request: ' . $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
+        }
+    }
+
+    /** Sin acentos: la térmica no siempre trae la página de códigos (mismo criterio que print-movtos). */
+    private function ticketSinAcentos($s): string
+    {
+        return strtr((string) $s, [
+            'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n',
+            'Á' => 'A', 'É' => 'E', 'Í' => 'I', 'Ó' => 'O', 'Ú' => 'U', 'Ü' => 'U', 'Ñ' => 'N',
+        ]);
+    }
+
+    private function etiquetaMovimientoCaja($type): string
+    {
+        $labels = [
+            'IN' => 'Entrada',
+            'OUT' => 'Salida',
+            'DROP' => 'Retiro a boveda',
+            'ADJUST' => 'Ajuste',
+            'PAYOUT' => 'Pago',
+        ];
+        $raw = strtoupper((string) $type);
+        return $labels[$raw] ?? $raw;
+    }
+
+    private function printReporteCajaBody($printer, array $data, bool $cerrada, int $W = 48): void
+    {
+        $t = function ($s) {
+            return $this->ticketSinAcentos($s);
+        };
+        $money = function ($v) {
+            return $this->formatMoney($v ?? 0);
+        };
+        $div = function () use ($printer, $W) {
+            $printer->text(str_repeat('-', $W) . "\n");
+        };
+        $sectionTitle = function (string $title) use ($printer) {
+            $printer->setEmphasis(true);
+            $printer->text($title . "\n");
+            $printer->setEmphasis(false);
+        };
+        $line = function ($left, $right) use ($printer, $W, $t) {
+            $this->printTwoColumnLine($printer, $t($left), $t($right), $W);
+        };
+        $signed = function ($v) use ($money) {
+            $n = (float) ($v ?? 0);
+            return ($n > 0 ? '+' : '') . $money($n);
+        };
+
+        $station = $data['station'] ?? [];
+        $session = $data['session'] ?? [];
+        $textos = $data['textos'] ?? [];
+        $closing = $data['closing'] ?? null;
+        $methods = $data['methods'] ?? [];
+        $movements = $data['movements'] ?? [];
+        $items = $movements['items'] ?? [];
+        $operators = $data['operators'] ?? [];
+        $personal = $data['personalDeclarations'] ?? [];
+        $summary = $data['summary'] ?? [];
+
+        // ── Cabecera ──
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        if (!empty($data['restaurante'])) {
+            $printer->setEmphasis(true);
+            $printer->text($t($data['restaurante']) . "\n");
+            $printer->setEmphasis(false);
+        }
+        $printer->setTextSize(1, 2);
+        $printer->setEmphasis(true);
+        $printer->text(($cerrada ? "CIERRE DE CAJA" : "REPORTE DE CAJA") . "\n");
+        $printer->setEmphasis(false);
+        $printer->setTextSize(1, 1);
+        if (!$cerrada) {
+            $printer->text("(caja abierta - corte en vivo)\n");
+        }
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+        $div();
+
+        $line('Caja', (string) ($station['name'] ?? $station['code'] ?? '-'));
+        $line('Responsable', (string) ($session['cashUserName'] ?? '-'));
+        $line('Apertura', (string) ($textos['apertura'] ?? $session['openedAt'] ?? '-'));
+        if ($cerrada) {
+            $line('Cierre', (string) ($textos['cierre'] ?? $session['closedAt'] ?? '-'));
+            $line('Cerrada por', (string) ($session['closedByName'] ?? '-'));
+        }
+        $div();
+
+        $line('Fondo inicial', $money($data['openingCash'] ?? 0));
+        $printer->setEmphasis(true);
+        $line($cerrada ? 'Efectivo esperado' : 'Efectivo esperado ahora', $money($data['expectedCash'] ?? 0));
+        $printer->setEmphasis(false);
+        if (is_array($closing)) {
+            $line('Efectivo contado', $money($closing['closingCash'] ?? 0));
+            $printer->setEmphasis(true);
+            $line('Diferencia', $signed($closing['difference'] ?? 0));
+            $printer->setEmphasis(false);
+        }
+        $div();
+
+        // ── Ventas por método ──
+        $sectionTitle('VENTAS POR METODO');
+        if (empty($methods)) {
+            $printer->text("Sin cobros en esta caja.\n");
+        }
+        foreach ($methods as $m) {
+            $printer->setEmphasis(true);
+            $printer->text($t($m['paymentMethodName'] ?? '') . "\n");
+            $printer->setEmphasis(false);
+            $line('  Ventas', $money($m['sales'] ?? 0));
+            if ((float) ($m['refunds'] ?? 0) != 0.0) $line('  Reembolsos', $money($m['refunds']));
+            if ((float) ($m['tips'] ?? 0) != 0.0) $line('  Propinas', $money($m['tips']));
+            $line('  Esperado', $money($m['expected'] ?? 0));
+            if ($cerrada && isset($m['declared']) && $m['declared'] !== null) {
+                $line('  Declarado', $money($m['declared']));
+                $line('  Diferencia', $signed($m['difference'] ?? 0));
+            }
+        }
+        $div();
+
+        // ── Movimientos de efectivo ──
+        $sectionTitle('MOVIMIENTOS DE EFECTIVO');
+        $line('Entradas', $money($movements['in'] ?? 0));
+        $line('Salidas', $money($movements['out'] ?? 0));
+        $line('Retiros a boveda', $money($movements['drops'] ?? 0));
+        $line('Ajustes', $money($movements['adjusts'] ?? 0));
+        $line('Propinas pagadas', $money($movements['tipPayouts'] ?? 0));
+        $line('Comisiones pagadas', $money($movements['commissionPayouts'] ?? 0));
+        $printer->setEmphasis(true);
+        $line('Neto', $money($movements['net'] ?? 0));
+        $printer->setEmphasis(false);
+        foreach ($items as $it) {
+            $hora = (string) ($it['hora'] ?? $it['createdAt'] ?? '');
+            if ($hora !== '') $printer->text($t($hora) . "\n");
+            $etq = $this->etiquetaMovimientoCaja($it['type'] ?? '');
+            if (!empty($it['reason'])) $etq .= ' (' . $it['reason'] . ')';
+            if (!empty($it['actorName'])) $etq .= ' - ' . $it['actorName'];
+            $line($etq, $money($it['amount'] ?? 0));
+        }
+        $div();
+
+        // ── Operadores ──
+        $sectionTitle('OPERADORES');
+        if (empty($operators)) {
+            $printer->text("Nadie ha cobrado todavia.\n");
+        }
+        foreach ($operators as $o) {
+            $printer->text($t($o['name'] ?? '') . (!empty($o['isResponsible']) ? ' (Responsable)' : '') . "\n");
+            $line('  ' . (int) ($o['paymentsCount'] ?? 0) . ' cobro(s) - ventas', $money($o['salesTotal'] ?? 0));
+            if ((float) ($o['tipsTotal'] ?? 0) != 0.0) $line('  Propinas', $money($o['tipsTotal']));
+        }
+
+        // ── Declaraciones personales ──
+        if (!empty($personal)) {
+            $div();
+            $sectionTitle('DECLARACIONES PERSONALES');
+            foreach ($personal as $d) {
+                $printer->text($t(($d['cashierName'] ?? '') . ' - ' . ($d['paymentMethodName'] ?? '')) . "\n");
+                if (!empty($d['declared'])) {
+                    $line('  ' . (!empty($d['isFinal']) ? 'Firmada' : 'Registrada'),
+                        $money((float) ($d['salesDeclared'] ?? 0) + (float) ($d['tipsDeclared'] ?? 0)));
+                    $line('  Diferencia', $signed($d['difference'] ?? 0));
+                } else {
+                    $printer->text("  Pendiente de declarar\n");
+                }
+            }
+        }
+        $div();
+
+        $line('Cuentas', (string) ($summary['ordersCount'] ?? 0));
+        $line('Venta bruta', $money($summary['salesGross'] ?? 0));
+        $line('Cuenta promedio', $money($summary['avgTicket'] ?? 0));
+        $div();
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        $printer->text('Impreso: ' . $t($textos['impreso'] ?? date('d/m/Y H:i')) . "\n");
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+    }
+
+    /**
      * Imprime la CUENTA / NOTA DE CONSUMO (estilo SoftRestaurant) usando datos directos del front sin templateId.
      * POST /printers/print-consumo
      * Body: array de objetos { printerName, data }
