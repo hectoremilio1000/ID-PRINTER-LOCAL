@@ -359,6 +359,28 @@ class PrinterController
     }
 
     /**
+     * `mb_strlen`/`mb_substr` seguros: el PHP portátil de algunas PCs no trae
+     * la extensión `mbstring` cargada (no está en `php.ini`, aunque el DLL sí
+     * esté en `ext/`). Llamarlas directo tira "Call to undefined function" —
+     * un `Error`, no una `Exception`, así que ni `printComanda` lo atrapa ni
+     * el navegador recibe respuesta con CORS: sale como "Failed to fetch" y
+     * parece un problema de red que no lo es. Mismo patrón que ya usa
+     * `safeSubstr()` en este archivo; aquí hacía falta también para `strlen`.
+     */
+    private function mbLen(string $s): int
+    {
+        return function_exists('mb_strlen') ? mb_strlen($s, 'UTF-8') : strlen($s);
+    }
+
+    private function mbSub(string $s, int $start, ?int $length = null): string
+    {
+        if (function_exists('mb_substr')) {
+            return $length === null ? mb_substr($s, $start, null, 'UTF-8') : mb_substr($s, $start, $length, 'UTF-8');
+        }
+        return $length === null ? substr($s, $start) : substr($s, $start, $length);
+    }
+
+    /**
      * Imprime un párrafo con partes en negrita y otras normales, cortando líneas SIN partir palabras.
      *
      * La impresora corta al llegar al borde aunque sea a media palabra ("J NARA / NJA"). Con letra grande
@@ -387,14 +409,14 @@ class PrinterController
             if ($texto === '') {
                 continue;
             }
-            if ($atomico && mb_strlen($texto, 'UTF-8') <= $ancho) {
+            if ($atomico && $this->mbLen($texto) <= $ancho) {
                 $palabras[] = [preg_replace('/\s+/u', $union, $texto), $negrita];
                 continue;
             }
             foreach (preg_split('/\s+/u', $texto, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $w) {
-                while (mb_strlen($w, 'UTF-8') > $ancho) {
-                    $palabras[] = [mb_substr($w, 0, $ancho, 'UTF-8'), $negrita];
-                    $w = mb_substr($w, $ancho, null, 'UTF-8');
+                while ($this->mbLen($w) > $ancho) {
+                    $palabras[] = [$this->mbSub($w, 0, $ancho), $negrita];
+                    $w = $this->mbSub($w, $ancho);
                 }
                 $palabras[] = [$w, $negrita];
             }
@@ -403,7 +425,7 @@ class PrinterController
         $actual = [];
         $largo = 0;
         foreach ($palabras as [$w, $negrita]) {
-            $l = mb_strlen($w, 'UTF-8');
+            $l = $this->mbLen($w);
             if (!empty($actual) && $largo + 1 + $l > $ancho) {
                 $lineas[] = $actual;
                 $actual = [];
