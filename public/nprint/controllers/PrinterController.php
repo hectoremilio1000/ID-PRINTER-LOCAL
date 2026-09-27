@@ -984,8 +984,13 @@ class PrinterController
                             $entries = $groups[$waiterKey];
                             $waiterName = $entries[0]['waiterFullName'] ?? 'Sin nombre';
                             $waiterTotal = 0;
+                            // Venta de las cuentas de ESTE mesero (cada entrada trae `sale`
+                            // desde Admin/Caja). Versiones viejas no lo mandan → queda en 0
+                            // y la línea no se imprime.
+                            $waiterSale = 0;
                             foreach ($entries as $entry) {
                                 $waiterTotal += (float) ($entry['amount'] ?? 0);
+                                $waiterSale += (float) ($entry['sale'] ?? 0);
                             }
 
                             $printer->setJustification(Printer::JUSTIFY_CENTER);
@@ -1015,6 +1020,12 @@ class PrinterController
                                 );
                             }
                             $printer->text(str_repeat('-', 48) . "\n");
+
+                            if ($waiterSale > 0) {
+                                $printer->setEmphasis(true);
+                                $printer->text("Total de venta: " . $this->formatMoney($waiterSale) . "\n");
+                                $printer->setEmphasis(false);
+                            }
 
                             $printer->feed(1);
                             $printer->setJustification(Printer::JUSTIFY_CENTER);
