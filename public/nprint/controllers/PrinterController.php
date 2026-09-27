@@ -1529,7 +1529,7 @@ class PrinterController
      * Cuerpo del corte X — mismas secciones/orden que buildPrintHtml() en
      * xcutHtmlBuilders.ts (admin y cash), solo que en ESC/POS en vez de HTML.
      */
-    private function printCorteXBody($printer, array $data, int $W = 48): void
+    private function printCorteXBody($printer, array $data, int $W = 42): void
     {
         $money = function ($v) {
             return $this->formatMoney($v ?? 0);
@@ -1912,7 +1912,7 @@ class PrinterController
         return $labels[$raw] ?? $raw;
     }
 
-    private function printReporteCajaBody($printer, array $data, bool $cerrada, int $W = 48): void
+    private function printReporteCajaBody($printer, array $data, bool $cerrada, int $W = 42): void
     {
         $t = function ($s) {
             return $this->ticketSinAcentos($s);
