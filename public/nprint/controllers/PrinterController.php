@@ -85,7 +85,7 @@ class PrinterController
                 $printer = new Printer($connector);
 
                 // Inicializar impresora
-                $printer->initialize();
+                $this->iniciarTicket($printer);
                 $printer->setJustification(Printer::JUSTIFY_LEFT);
 
 
@@ -290,6 +290,151 @@ class PrinterController
         return $response->withHeader('Content-Type', 'application/json');
     }
 
+    /**
+     * Arranca un ticket de TEXTO: reinicia la impresora y FIJA la página de códigos 0 (CP437).
+     *
+     * Por qué no basta `initialize()`: la librería lo trata como "ya estoy en la página 0" (guarda
+     * ese estado sin mandar nada), así que las letras que existen en CP437 (á é í ó ú ñ ü) se envían
+     * SIN `ESC t` y la impresora las lee con su página de fábrica. Si esa no es CP437 (la barra de
+     * Fogo: Latin-1) salía "Cl sica" y "Sangr¡a". Mandando `ESC t 0` la impresora queda en la misma
+     * página que la librería cree que tiene, sea cual sea su configuración de fábrica.
+     */
+    private function iniciarTicket($printer): void
+    {
+        $printer->initialize();
+        $printer->selectCharacterTable(0);
+    }
+
+    /** 4 → "4", 0.5 → "0.5": sin ceros de más. */
+    private function cantidadLimpia($q): string
+    {
+        $t = rtrim(rtrim(number_format((float) $q, 2, '.', ''), '0'), '.');
+        return $t === '' ? '0' : $t;
+    }
+
+    /**
+     * Junta los modificadores repetidos de un producto: 4 filas "A. MINERAL" → una sola con qty 4.
+     *
+     * El front manda cada pieza como su propia fila (Botella + 4 aguas = 4 filas iguales), y el
+     * ticket las repetía. Se agrupa por nombre + mitad + nota (una nota distinta NO se mezcla) y se
+     * conserva el orden de la primera aparición. Las mitades ("1ERA MITAD - X") no se suman: cada una
+     * es su propia línea.
+     *
+     * @return array<int, array{name:string, half:int, qty:float, notes:string}>
+     */
+    private function agruparModificadores(array $modifiers): array
+    {
+        $grupos = [];
+        foreach ($modifiers as $modifier) {
+            $name = trim((string) ($modifier['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $half = (int) ($modifier['half'] ?? 1);
+            if ($half < 1 || $half > 3) {
+                $half = 1;
+            }
+            $notes = trim((string) ($modifier['notes'] ?? ''));
+            $qty = (float) ($modifier['qty'] ?? 1);
+            if ($qty <= 0 || $half !== 1) {
+                $qty = 1;
+            }
+            $key = $half === 1 ? $name . '|1|' . $notes : $name . '|' . $half . '|' . $notes . '|' . count($grupos);
+            if (isset($grupos[$key])) {
+                $grupos[$key]['qty'] += $qty;
+            } else {
+                $grupos[$key] = ['name' => $name, 'half' => $half, 'qty' => $qty, 'notes' => $notes];
+            }
+        }
+        return array_values($grupos);
+    }
+
+    /** "4 x A. MINERAL" (siempre con cantidad, también 1) o "1ERA MITAD - PEPERONI". */
+    private function etiquetaModificador(array $m): string
+    {
+        if ($m['half'] !== 1) {
+            return $this->formatHalfLabel($m['half']) . ' - ' . $m['name'];
+        }
+        return $this->cantidadLimpia($m['qty']) . ' x ' . $m['name'];
+    }
+
+    /**
+     * Imprime un párrafo con partes en negrita y otras normales, cortando líneas SIN partir palabras.
+     *
+     * La impresora corta al llegar al borde aunque sea a media palabra ("J NARA / NJA"). Con letra grande
+     * el renglón es corto y pasaba seguido. Aquí el corte se hace por palabras; una palabra más larga que
+     * el renglón sí se parte, para no perder texto.
+     *
+     * Cada segmento puede ser ATÓMICO: si cabe en un renglón, se mantiene junto ("** 4 x A. MINERAL **"
+     * no se corta entre "4" y "x"); si no cabe, se corta por palabras. Un segmento que empieza con coma
+     * la pega a la palabra anterior (sin espacio antes).
+     *
+     * @param array<int, array{0:string, 1:bool, 2?:bool}> $segmentos [texto, negrita, atómico]
+     * @param int $ancho caracteres por renglón AL TAMAÑO con que se imprime (48 / multiplicador de ancho)
+     */
+    private function imprimirParrafo($printer, array $segmentos, int $ancho): void
+    {
+        $union = "\x01"; // espacio que no se corta; se cambia por un espacio real al imprimir
+        $palabras = [];
+        foreach ($segmentos as $seg) {
+            $texto = trim((string) $seg[0]);
+            $negrita = (bool) $seg[1];
+            $atomico = !empty($seg[2]);
+            if ($texto !== '' && $texto[0] === ',' && !empty($palabras)) {
+                $palabras[count($palabras) - 1][0] .= ',';
+                $texto = ltrim(substr($texto, 1));
+            }
+            if ($texto === '') {
+                continue;
+            }
+            if ($atomico && mb_strlen($texto, 'UTF-8') <= $ancho) {
+                $palabras[] = [preg_replace('/\s+/u', $union, $texto), $negrita];
+                continue;
+            }
+            foreach (preg_split('/\s+/u', $texto, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $w) {
+                while (mb_strlen($w, 'UTF-8') > $ancho) {
+                    $palabras[] = [mb_substr($w, 0, $ancho, 'UTF-8'), $negrita];
+                    $w = mb_substr($w, $ancho, null, 'UTF-8');
+                }
+                $palabras[] = [$w, $negrita];
+            }
+        }
+        $lineas = [];
+        $actual = [];
+        $largo = 0;
+        foreach ($palabras as [$w, $negrita]) {
+            $l = mb_strlen($w, 'UTF-8');
+            if (!empty($actual) && $largo + 1 + $l > $ancho) {
+                $lineas[] = $actual;
+                $actual = [];
+                $largo = 0;
+            }
+            $largo += (empty($actual) ? 0 : 1) + $l;
+            $actual[] = [$w, $negrita];
+        }
+        if (!empty($actual)) {
+            $lineas[] = $actual;
+        }
+        foreach ($lineas as $linea) {
+            // Palabras seguidas con la misma negrita van juntas, para no encender/apagar la negrita a cada palabra.
+            $corridas = [];
+            foreach ($linea as [$w, $negrita]) {
+                $n = count($corridas);
+                if ($n > 0 && $corridas[$n - 1][1] === $negrita) {
+                    $corridas[$n - 1][0] .= ' ' . $w;
+                } else {
+                    $corridas[] = [($n > 0 ? ' ' : '') . $w, $negrita];
+                }
+            }
+            foreach ($corridas as [$texto, $negrita]) {
+                $printer->setEmphasis($negrita);
+                $printer->text(str_replace($union, ' ', $texto));
+            }
+            $printer->setEmphasis(false);
+            $printer->text("\n");
+        }
+    }
+
     /* Cuerpo del ticket de cocina. Lo comparten la comanda y el ticket de
      * cancelación a propósito: cocina ya sabe leer este formato de un vistazo
      * — misma posición del área, la mesa y la orden — y un diseño distinto
@@ -303,7 +448,7 @@ class PrinterController
          * sale el ticket de siempre. */
         $esAntro = !$esCancelacion && (int) ($data['tipo'] ?? 1) === 2;
 
-        $printer->initialize();
+        $this->iniciarTicket($printer);
         $printer->setJustification(Printer::JUSTIFY_CENTER);
         $printer->setTextSize(2, 2);
         $printer->text($esCancelacion ? "** CANCELACION **\n" : "COMANDA TICKET\n");
@@ -398,47 +543,41 @@ class PrinterController
                 if ($itemLine === '') {
                     $itemLine = 'Producto sin nombre';
                 }
+                /* Modificadores repetidos → una línea con cantidad ("4 x A. MINERAL"). Siempre se
+                 * escribe la cantidad, también cuando es 1. */
+                $modsAgrupados = $this->agruparModificadores($modifiers);
+
                 if ($esAntro) {
-                    /* "1-Nombre, ** MOD **, ** MOD **": la mitad solo se
-                     * escribe cuando no es "TODO", y la nota del modificador,
-                     * si trae, va entre paréntesis para que no se pierda. */
-                    foreach ($modifiers as $modifier) {
-                        $modifierName = trim((string) ($modifier['name'] ?? ''));
-                        if ($modifierName === '') {
-                            continue;
+                    /* "1-Nombre, ** 4 x MOD **, ** 1 x MOD **". Antro: letra MÁS GRANDE en los pedidos y
+                     * el producto en NEGRITA solo cuando lleva modificadores; los modificadores, normales.
+                     * La mitad solo se escribe cuando no es "TODO", y la nota del modificador, si trae,
+                     * va entre paréntesis para que no se pierda. */
+                    $segmentos = [[$itemLine, !empty($modsAgrupados), true]];
+                    foreach ($modsAgrupados as $m) {
+                        $etiqueta = $this->etiquetaModificador($m);
+                        if ($m['notes'] !== '') {
+                            $etiqueta .= ' (' . $m['notes'] . ')';
                         }
-                        $halfLabel = $this->formatHalfLabel($modifier['half'] ?? null);
-                        $modifierLabel = ($halfLabel !== '' && $halfLabel !== 'TODO')
-                            ? $halfLabel . ' - ' . $modifierName
-                            : $modifierName;
-                        $modifierNotes = trim((string) ($modifier['notes'] ?? ''));
-                        if ($modifierNotes !== '') {
-                            $modifierLabel .= ' (' . $modifierNotes . ')';
-                        }
-                        $itemLine .= ', ** ' . $modifierLabel . ' **';
+                        $segmentos[] = [', ** ' . $etiqueta . ' **', false, true];
                     }
+                    $printer->setTextSize(2, 2);
+                    $this->imprimirParrafo($printer, $segmentos, 24);
+                    $printer->setTextSize(1, 2);
+                } else {
+                    $printer->text($itemLine . "\n");
                 }
-                $printer->text($itemLine . "\n");
 
                 $notes = $item['notes'] ?? null;
                 if (!empty($notes)) {
                     $printer->text("Nota: " . $notes . "\n");
                 }
 
-                if (!$esAntro && !empty($modifiers)) {
+                if (!$esAntro && !empty($modsAgrupados)) {
                     $printer->text("Modificadores:\n");
-                    foreach ($modifiers as $modifier) {
-                        $halfLabel = $this->formatHalfLabel($modifier['half'] ?? null);
-                        $modifierName = (string) ($modifier['name'] ?? '');
-                        $modifierLabel = trim(($halfLabel !== '' ? $halfLabel . ' - ' : '') . $modifierName);
-                        if ($modifierLabel === '') {
-                            continue;
-                        }
-                        $printer->text('   ' . $modifierLabel . "\n");
-
-                        $modifierNotes = $modifier['notes'] ?? null;
-                        if (!empty($modifierNotes)) {
-                            $printer->text("      Nota: " . $modifierNotes . "\n");
+                    foreach ($modsAgrupados as $m) {
+                        $printer->text('   ' . $this->etiquetaModificador($m) . "\n");
+                        if ($m['notes'] !== '') {
+                            $printer->text("      Nota: " . $m['notes'] . "\n");
                         }
                     }
                 }
@@ -794,7 +933,7 @@ class PrinterController
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
-                    $printer->initialize();
+                    $this->iniciarTicket($printer);
 
                     if (empty($groups)) {
                         // Sin registros de propinas: se imprime un único ticket informativo.
@@ -911,6 +1050,193 @@ class PrinterController
     }
 
     /**
+     * Comprobante de PAGO DE COMISIONES a meseros — el equivalente de `print-propinas` para comisiones.
+     * POST /printers/print-comisiones
+     *
+     * Antes las propinas pagadas se imprimían y las comisiones NO: quien entregaba el dinero no tenía comprobante.
+     *
+     * Body: { printerName, data: { comisiones: [ { waiterId?, waiterName, amount, metodo?, totalEarned?, totalPaid?,
+     *          pending? } ], total?, turno?, pagadoPor? } }  — o un arreglo de esos jobs.
+     *   amount      → lo que se acaba de pagar
+     *   totalPaid   → acumulado pagado al mesero, YA con este pago
+     * Un ticket por mesero, cortando el papel entre uno y otro (mismo criterio que print-propinas).
+     */
+    public function printComisiones(Request $request, Response $response, $args = [])
+    {
+        try {
+            $jobs = $request->getParsedBody();
+            if (!is_array($jobs)) {
+                $rawBody = (string) $request->getBody();
+                $jobs = json_decode($rawBody, true);
+            }
+            if (isset($jobs['printerName']) && isset($jobs['data'])) {
+                $jobs = [$jobs];
+            }
+            if (!is_array($jobs)) {
+                $response->getBody()->write(json_encode([
+                    'success' => 0,
+                    'message' => 'El cuerpo debe ser un array JSON válido.'
+                ], JSON_UNESCAPED_UNICODE));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $results = [];
+            foreach ($jobs as $job) {
+                $printerName = $job['printerName'] ?? null;
+                $data = $job['data'] ?? [];
+
+                if (!$printerName) {
+                    $results[] = ['success' => 0, 'message' => 'Nombre de impresora es requerido', 'printer_name' => $printerName];
+                    continue;
+                }
+                if (!is_array($data)) {
+                    $results[] = ['success' => 0, 'message' => 'El campo data debe ser un objeto', 'printer_name' => $printerName];
+                    continue;
+                }
+
+                $entradas = [];
+                foreach (($data['comisiones'] ?? []) as $entry) {
+                    if (is_array($entry) && (float) ($entry['amount'] ?? 0) > 0) {
+                        $entradas[] = $entry;
+                    }
+                }
+
+                // Un ticket por mesero, en el orden en que vienen.
+                $grupos = [];
+                $orden = [];
+                foreach ($entradas as $entry) {
+                    $clave = (string) ($entry['waiterId'] ?? $entry['waiterName'] ?? '__sin_mesero__');
+                    if (!isset($grupos[$clave])) {
+                        $grupos[$clave] = [];
+                        $orden[] = $clave;
+                    }
+                    $grupos[$clave][] = $entry;
+                }
+
+                $printer = null;
+                $printerClosed = false;
+                try {
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
+                    $printer = new Printer($connector);
+                    $this->renderComisionesBody($printer, $data, $grupos, $orden);
+                    $printer->close();
+                    $printerClosed = true;
+
+                    $n = empty($grupos) ? 1 : count($grupos);
+                    $results[] = [
+                        'success' => 1,
+                        'message' => 'Se imprimieron ' . $n . ' ticket(s) de comisiones en ' . $printerName . ' (uno por mesero)',
+                        'printer_name' => $printerName,
+                        'template' => 'comisiones_ticket',
+                        'tickets_printed' => $n,
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
+                } catch (Exception $e) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'Error al imprimir: ' . $e->getMessage(),
+                        'printer_name' => $printerName,
+                        'error_type' => 'general'
+                    ];
+                } finally {
+                    if ($printer && !$printerClosed) {
+                        try {
+                            $printer->close();
+                        } catch (Exception $inner) {
+                        }
+                    }
+                }
+            }
+
+            $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (Exception $e) {
+            $response->getBody()->write(json_encode([
+                'success' => 0,
+                'message' => 'Error al procesar el request: ' . $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
+        }
+    }
+
+    /** Cuerpo del comprobante de comisiones (separado de la ruta para poder probarlo sin impresora). */
+    private function renderComisionesBody($printer, array $data, array $grupos, array $orden): void
+    {
+        $W = 48;
+        $this->iniciarTicket($printer);
+
+        $encabezado = function () use ($printer, $data) {
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            $printer->setTextSize(2, 2);
+            $printer->setEmphasis(true);
+            $printer->text("PAGO DE COMISIONES\n");
+            $printer->setEmphasis(false);
+            $printer->feed(1);
+            $printer->setTextSize(1, 1);
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+            $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
+            if (!empty($data['turno'])) {
+                $printer->text("Turno: #" . $data['turno'] . "\n");
+            }
+        };
+
+        if (empty($grupos)) {
+            $encabezado();
+            $printer->text(str_repeat('-', $W) . "\n");
+            $printer->text("Sin pagos de comisiones.\n");
+            $printer->feed(3);
+            $printer->cut();
+            return;
+        }
+
+        foreach ($orden as $clave) {
+            $entries = $grupos[$clave];
+            $nombre = trim((string) ($entries[0]['waiterName'] ?? '')) ?: 'Sin nombre';
+            $total = 0.0;
+            foreach ($entries as $e) {
+                $total += (float) ($e['amount'] ?? 0);
+            }
+
+            $encabezado();
+            $printer->text("Mesero: " . $nombre . "\n");
+            if (!empty($data['pagadoPor'])) {
+                $printer->text("Pagó: " . $data['pagadoPor'] . "\n");
+            }
+            $printer->text(str_repeat('-', $W) . "\n");
+            foreach ($entries as $e) {
+                $metodo = trim((string) ($e['metodo'] ?? ''));
+                $this->printTwoColumnLine($printer, 'Pago' . ($metodo !== '' ? ' (' . $metodo . ')' : ''), $this->formatMoney($e['amount'] ?? 0), $W);
+            }
+            // Cómo va el mesero: lo ganado, lo pagado hasta ahora (con este pago) y lo que queda.
+            $ultimo = end($entries);
+            if (isset($ultimo['totalEarned'])) {
+                $printer->text(str_repeat('-', $W) . "\n");
+                $this->printTwoColumnLine($printer, 'Comision ganada', $this->formatMoney($ultimo['totalEarned']), $W);
+                if (isset($ultimo['totalPaid'])) {
+                    $this->printTwoColumnLine($printer, 'Pagada (acumulado)', $this->formatMoney($ultimo['totalPaid']), $W);
+                }
+                if (isset($ultimo['pending'])) {
+                    $this->printTwoColumnLine($printer, 'Pendiente', $this->formatMoney($ultimo['pending']), $W);
+                }
+            }
+            $printer->text(str_repeat('-', $W) . "\n");
+            $printer->feed(1);
+
+            // Total grande. Con letra doble caben 24 caracteres: se corta por palabras, no a media palabra.
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            $printer->setTextSize(2, 2);
+            $this->imprimirParrafo($printer, [['TOTAL COMISION - ' . strtoupper($nombre), true]], 24);
+            $printer->setEmphasis(true);
+            $printer->text($this->formatMoney($total) . "\n");
+            $printer->setEmphasis(false);
+            $printer->setTextSize(1, 1);
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+            $printer->feed(3);
+            $printer->cut();
+        }
+    }
+
+    /**
      * Imprime un reporte de movimiento de caja con el monto destacado.
      * POST /printers/print-movtos
      */
@@ -1005,7 +1331,7 @@ class PrinterController
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
 
-                    $printer->initialize();
+                    $this->iniciarTicket($printer);
                     $printer->setJustification(Printer::JUSTIFY_CENTER);
                     $printer->setTextSize(2, 2);
                     $printer->setEmphasis(true);
@@ -1155,7 +1481,7 @@ class PrinterController
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
-                    $printer->initialize();
+                    $this->iniciarTicket($printer);
 
                     $this->printCorteXBody($printer, $data);
 
@@ -1229,15 +1555,20 @@ class PrinterController
         $courtesyByCategory = $data['courtesyByCategory'] ?? [];
         $discountByCategory = $data['discountByCategory'] ?? [];
 
+        /* dd/mm/aaaa hh:mm en la hora de ESTA PC (la del restaurante). El backend manda ISO-8601 en UTC; antes
+         * llegaba `String(Date)` ("Sat Sep 26 2026 23:38:01 GMT+0000 (Coordinated Universal Time)") y se imprimía
+         * tal cual, en inglés y en UTC. */
         $fmtDT = function ($iso) {
             if (!$iso) return '';
             try {
                 $dt = new DateTime($iso);
-                return $dt->format('Y-m-d H:i');
+                $dt->setTimezone(new \DateTimeZone(date_default_timezone_get()));
+                return $dt->format('d/m/Y H:i');
             } catch (Exception $e) {
                 return (string) $iso;
             }
         };
+        $cajas = is_array($data['cajas'] ?? null) ? $data['cajas'] : [];
 
         // ── Cabecera ──
         $printer->setJustification(Printer::JUSTIFY_CENTER);
@@ -1248,11 +1579,11 @@ class PrinterController
         if (!empty($company['address'])) $printer->text($company['address'] . "\n");
         $printer->setTextSize(1, 2);
         $printer->setEmphasis(true);
-        $printer->text("CORTE DE CAJA X\n");
+        $printer->text("REPORTE DE TURNO\n");
         $printer->setEmphasis(false);
         $printer->setTextSize(1, 1);
-        $printer->text("DEL " . $fmtDT($shift['openedAt'] ?? null) . "\n");
-        $printer->text("AL  " . $fmtDT($shift['closedAt'] ?? null) . "\n");
+        $printer->text("APERTURA: " . $fmtDT($shift['openedAt'] ?? null) . "\n");
+        $printer->text("CIERRE:   " . $fmtDT($shift['closedAt'] ?? null) . "\n");
         $turnoLine = "TURNO: " . ($shift['id'] ?? '');
         if (!empty($shift['stationName'])) $turnoLine .= " · ESTACIÓN: " . $shift['stationName'];
         $printer->text($turnoLine . "\n");
@@ -1262,8 +1593,60 @@ class PrinterController
         $printer->setJustification(Printer::JUSTIFY_LEFT);
         $div();
 
+        // ── Cajas del turno: una por SESIÓN que de verdad se abrió, con quién la abrió y cómo cerró ──
+        if (!empty($cajas)) {
+            $sectionTitle('CAJAS DEL TURNO');
+            $printer->text(count($cajas) . " sesion(es) de caja\n");
+            $div();
+            foreach ($cajas as $i => $c) {
+                $st = $c['station'] ?? [];
+                $nombre = (string) ($st['name'] ?? $st['code'] ?? 'Caja');
+                $printer->setEmphasis(true);
+                $printer->text(($i + 1) . '. ' . $nombre . (strtoupper((string) ($st['mode'] ?? '')) === 'MASTER' ? ' (principal)' : '') . "\n");
+                $printer->setEmphasis(false);
+                $this->printTwoColumnLine($printer, '  Responsable', (string) ($c['responsible'] ?? '-'), $W);
+                $this->printTwoColumnLine($printer, '  Apertura', $fmtDT($c['openedAt'] ?? null), $W);
+                if (!empty($c['closedAt'])) {
+                    $this->printTwoColumnLine($printer, '  Cierre', $fmtDT($c['closedAt']), $W);
+                    if (!empty($c['closedBy'])) $this->printTwoColumnLine($printer, '  Cerrada por', (string) $c['closedBy'], $W);
+                } else {
+                    $printer->text("  (sin cerrar)\n");
+                }
+                $this->printTwoColumnLine($printer, '  Fondo inicial', $money($c['openingCash'] ?? 0), $W);
+                foreach (($c['methods'] ?? []) as $m) {
+                    $printer->text('  ' . strtoupper((string) ($m['name'] ?? '')) . "\n");
+                    $this->printTwoColumnLine($printer, '    Ventas', $money($m['sales'] ?? 0), $W);
+                    if ((float) ($m['tips'] ?? 0) != 0.0) $this->printTwoColumnLine($printer, '    Propinas', $money($m['tips']), $W);
+                    if (isset($m['declared']) && $m['declared'] !== null) {
+                        $this->printTwoColumnLine($printer, '    Esperado', $money($m['expected'] ?? 0), $W);
+                        $this->printTwoColumnLine($printer, '    Declarado', $money($m['declared']), $W);
+                        $dif = (float) ($m['difference'] ?? 0);
+                        $this->printTwoColumnLine($printer, '    Diferencia', ($dif > 0 ? '+' : '') . $money($dif), $W);
+                    }
+                }
+                $sum = $c['summary'] ?? [];
+                $ops = $c['operational'] ?? [];
+                $this->printTwoColumnLine($printer, '  Cuentas', (string) ($sum['ordersCount'] ?? 0), $W);
+                $this->printTwoColumnLine($printer, '  Personas', (string) ($ops['persons'] ?? 0), $W);
+                $this->printTwoColumnLine($printer, '  Venta bruta', $money($sum['salesGross'] ?? 0), $W);
+                $operadores = $c['operators'] ?? [];
+                if (!empty($operadores)) {
+                    $printer->text("  Cobraron:\n");
+                    foreach ($operadores as $o) {
+                        $this->printTwoColumnLine(
+                            $printer,
+                            '    ' . ($o['name'] ?? '') . (!empty($o['isResponsible']) ? ' (resp.)' : ''),
+                            $money($o['salesTotal'] ?? 0),
+                            $W
+                        );
+                    }
+                }
+                $div();
+            }
+        }
+
         // ── CAJA ──
-        $sectionTitle('CAJA');
+        $sectionTitle(!empty($cajas) ? 'TODAS LAS CAJAS' : 'CAJA');
         $this->printTwoColumnLine($printer, '+EFECTIVO INIC', $money($data['openingCash'] ?? 0), $W);
         foreach ($salesByMethod as $m) {
             $this->printTwoColumnLine($printer, '+VENTA ' . strtoupper($m['name'] ?? ''), $money($m['salesAmount'] ?? 0), $W);
@@ -1463,7 +1846,7 @@ class PrinterController
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
-                    $printer->initialize();
+                    $this->iniciarTicket($printer);
 
                     $this->printReporteCajaBody($printer, $data, $cerrada);
 
@@ -1563,6 +1946,8 @@ class PrinterController
         $operators = $data['operators'] ?? [];
         $personal = $data['personalDeclarations'] ?? [];
         $summary = $data['summary'] ?? [];
+        /* Información operativa del cierre (solo la manda el backend nuevo). Sin ella el ticket sale como antes. */
+        $op = is_array($data['operational'] ?? null) ? $data['operational'] : null;
 
         // ── Cabecera ──
         $printer->setJustification(Printer::JUSTIFY_CENTER);
@@ -1591,17 +1976,33 @@ class PrinterController
         }
         $div();
 
-        $line('Fondo inicial', $money($data['openingCash'] ?? 0));
-        $printer->setEmphasis(true);
-        $line($cerrada ? 'Efectivo esperado' : 'Efectivo esperado ahora', $money($data['expectedCash'] ?? 0));
-        $printer->setEmphasis(false);
-        if (is_array($closing)) {
-            $line('Efectivo contado', $money($closing['closingCash'] ?? 0));
+        /* Fondo inicial y efectivo esperado SOLO en el cierre. Con la caja abierta NO se imprimen: quien va a
+         * declarar su arqueo vería contra qué número cuadrar y dejaría de contar a ciegas. */
+        if ($cerrada) {
+            $line('Fondo inicial', $money($data['openingCash'] ?? 0));
             $printer->setEmphasis(true);
-            $line('Diferencia', $signed($closing['difference'] ?? 0));
+            $line('Efectivo esperado', $money($data['expectedCash'] ?? 0));
             $printer->setEmphasis(false);
+            if (is_array($closing)) {
+                $line('Efectivo contado', $money($closing['closingCash'] ?? 0));
+                $printer->setEmphasis(true);
+                $line('Diferencia', $signed($closing['difference'] ?? 0));
+                $printer->setEmphasis(false);
+            }
+            $div();
         }
-        $div();
+
+        // ── Totales generales del consumo (cierre): sin impuestos, IVA y con impuestos ──
+        if ($cerrada && $op !== null) {
+            $tot = $op['totals'] ?? [];
+            $sectionTitle('TOTALES GENERALES');
+            $line('Venta sin impuestos', $money($tot['net'] ?? 0));
+            $line('IVA', $money($tot['tax'] ?? 0));
+            $printer->setEmphasis(true);
+            $line('Venta con impuestos', $money($tot['gross'] ?? 0));
+            $printer->setEmphasis(false);
+            $div();
+        }
 
         // ── Ventas por método ──
         $sectionTitle('VENTAS POR METODO');
@@ -1615,7 +2016,7 @@ class PrinterController
             $line('  Ventas', $money($m['sales'] ?? 0));
             if ((float) ($m['refunds'] ?? 0) != 0.0) $line('  Reembolsos', $money($m['refunds']));
             if ((float) ($m['tips'] ?? 0) != 0.0) $line('  Propinas', $money($m['tips']));
-            $line('  Esperado', $money($m['expected'] ?? 0));
+            if ($cerrada) $line('  Esperado', $money($m['expected'] ?? 0));
             if ($cerrada && isset($m['declared']) && $m['declared'] !== null) {
                 $line('  Declarado', $money($m['declared']));
                 $line('  Diferencia', $signed($m['difference'] ?? 0));
@@ -1643,6 +2044,45 @@ class PrinterController
             $line($etq, $money($it['amount'] ?? 0));
         }
         $div();
+
+        // ── Información operativa (cierre) ──
+        if ($cerrada && $op !== null) {
+            $sectionTitle('INFORMACION OPERATIVA');
+            $line('Cuentas cobradas', (string) ($op['orders'] ?? 0));
+            $line('Platillos', $this->cantidadLimpia($op['dishes'] ?? 0));
+            $line('Personas', (string) ($op['persons'] ?? 0));
+            $line('Prom. platillos / cuenta', $this->cantidadLimpia($op['avgDishesPerOrder'] ?? 0));
+            $line('Prom. $ / cuenta', $money($op['avgPerOrder'] ?? 0));
+            $line('Prom. $ / persona', $money($op['avgPerPerson'] ?? 0));
+            $servicios = $op['byService'] ?? [];
+            if (!empty($servicios)) {
+                $printer->setEmphasis(true);
+                $printer->text("Ventas por tipo de servicio\n");
+                $printer->setEmphasis(false);
+                foreach ($servicios as $sv) {
+                    $line('  ' . ($sv['name'] ?? '') . ' (' . (int) ($sv['orders'] ?? 0) . ')', $money($sv['sales'] ?? 0));
+                }
+            }
+            $cor = $op['courtesies'] ?? [];
+            $can = $op['cancellations'] ?? [];
+            $des = $op['discounts'] ?? [];
+            $printer->setEmphasis(true);
+            $printer->text("Cortesias\n");
+            $printer->setEmphasis(false);
+            $line('  Platillos', $this->cantidadLimpia($cor['dishes'] ?? 0) . ' - ' . $money($cor['dishesAmount'] ?? 0));
+            $line('  Cuentas', (string) ($cor['accounts'] ?? 0));
+            $printer->setEmphasis(true);
+            $printer->text("Cancelaciones\n");
+            $printer->setEmphasis(false);
+            $line('  Platillos', $this->cantidadLimpia($can['dishes'] ?? 0) . ' - ' . $money($can['dishesAmount'] ?? 0));
+            $line('  Cuentas anuladas', (int) ($can['accounts'] ?? 0) . ' - ' . $money($can['accountsAmount'] ?? 0));
+            $printer->setEmphasis(true);
+            $printer->text("Descuentos\n");
+            $printer->setEmphasis(false);
+            $line('  Platillos', (int) ($des['dishes'] ?? 0) . ' - ' . $money($des['dishesAmount'] ?? 0));
+            $line('  Cuentas', (int) ($des['accounts'] ?? 0) . ' - ' . $money($des['accountsAmount'] ?? 0));
+            $div();
+        }
 
         // ── Operadores ──
         $sectionTitle('OPERADORES');
@@ -1674,7 +2114,7 @@ class PrinterController
 
         $line('Cuentas', (string) ($summary['ordersCount'] ?? 0));
         $line('Venta bruta', $money($summary['salesGross'] ?? 0));
-        $line('Cuenta promedio', $money($summary['avgTicket'] ?? 0));
+        if (!($cerrada && $op !== null)) $line('Cuenta promedio', $money($summary['avgTicket'] ?? 0));
         $div();
         $printer->setJustification(Printer::JUSTIFY_CENTER);
         $printer->text('Impreso: ' . $t($textos['impreso'] ?? date('d/m/Y H:i')) . "\n");
@@ -1716,7 +2156,7 @@ class PrinterController
         $propina = (float)($tot['propina'] ?? 0);
         $consumo = isset($tot['consumo']) ? (float)$tot['consumo'] : null;
 
-        $printer->initialize();
+        $this->iniciarTicket($printer);
 
         /* ===== Cabecera Restaurante ===== */
         $printer->setJustification(Printer::JUSTIFY_CENTER);
@@ -1820,19 +2260,25 @@ class PrinterController
             $printer->text(str_repeat('-', $W) . "\n");
         }
 
-        /* ===== Consumo + propina =====
-         * Solo cuando hubo propina. Sin estas dos líneas el TOTAL no cuadra
-         * con la suma de los productos y el cliente no sabe por qué. */
+        /* ===== Totales, en este orden =====
+         *   SUBTOTAL · IVA · TOTAL CONSUMO · PROPINA · TOTAL (grande) · formas de pago
+         *
+         * Subtotal e IVA se imprimen tal como vienen: la propina no causa IVA, así que quien arma el
+         * payload es el que debe sacar la base del CONSUMO, no del total cobrado. Aquí no se recalcula
+         * nada. "TOTAL CONSUMO" y "PROPINA" solo salen cuando hubo propina: sin ella, TOTAL CONSUMO
+         * sería el mismo número que el TOTAL grande de abajo. */
+        $this->printTwoColumnLine($printer, 'SUBTOTAL', $this->formatMoney($tot['subtotal'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'IVA', $this->formatMoney($tot['iva'] ?? 0), $W);
         if ($propina > 0) {
             $this->printTwoColumnLine(
                 $printer,
-                'CONSUMO',
+                'TOTAL CONSUMO',
                 $this->formatMoney($consumo !== null ? $consumo : (($tot['total'] ?? 0) - $propina)),
                 $W
             );
             $this->printTwoColumnLine($printer, 'PROPINA', $this->formatMoney($propina), $W);
-            $printer->text(str_repeat('-', $W) . "\n");
         }
+        $printer->text(str_repeat('-', $W) . "\n");
 
         /* ===== TOTAL grande ===== */
         $printer->setJustification(Printer::JUSTIFY_CENTER);
@@ -1841,44 +2287,34 @@ class PrinterController
         $printer->setTextSize(1, 1);
         $printer->setJustification(Printer::JUSTIFY_LEFT);
 
-        $printer->text(str_repeat('=', $W) . "\n");
+        $printer->text(str_repeat('-', $W) . "\n");
 
-        /* ===== Total en letra ===== */
-        if (!empty($tot['totalEnLetra'])) {
-            $printer->text($tot['totalEnLetra'] . "\n\n");
+        /* ===== Total en letra =====
+         * Solo si de verdad trae LETRAS. Los tres fronts mandan hoy el importe como número ("253.00",
+         * un placeholder que nunca se implementó) y salía repetido justo debajo del TOTAL grande. */
+        $enLetra = trim((string)($tot['totalEnLetra'] ?? ''));
+        if ($enLetra !== '' && preg_match('/\p{L}/u', $enLetra)) {
+            $printer->text($enLetra . "\n\n");
         }
 
-        /* ===== Subtotal / IVA =====
-         * Se imprimen tal como vienen: la propina no causa IVA, así que quien
-         * arma el payload es el que debe sacar la base del CONSUMO, no del
-         * total cobrado. Aquí no se recalcula nada. */
-        $this->printTwoColumnLine(
-            $printer,
-            "SUBTOTAL:" . $this->formatMoney($tot['subtotal'] ?? 0),
-            "IVA:" . $this->formatMoney($tot['iva'] ?? 0),
-            $W
-        );
-
-        /* ===== Forma de pago ===== */
+        /* ===== Formas de pago ===== */
         $this->printFormaDePago($printer, $pagos, $W);
     }
 
     /* Desglose de cómo se pagó: una línea por pago, separando propina.
      * No imprime nada si no vienen pagos — así el ticket de cuenta previo al
-     * cobro queda idéntico a como estaba. */
+     * cobro no lleva este bloque. Ya NO imprime "TOTAL PAGADO": esa suma es el
+     * TOTAL grande de arriba y repetirla solo estorbaba. */
     private function printFormaDePago($printer, array $pagos, int $W): void
     {
         if (empty($pagos)) return;
 
-        $printer->text(str_repeat('=', $W) . "\n");
         $printer->setEmphasis(true);
         $printer->setJustification(Printer::JUSTIFY_CENTER);
-        $printer->text("FORMA DE PAGO\n");
+        $printer->text("FORMAS DE PAGO\n");
         $printer->setJustification(Printer::JUSTIFY_LEFT);
         $printer->setEmphasis(false);
-        $printer->text(str_repeat('-', $W) . "\n");
 
-        $sumaPagos = 0.0;
         foreach ($pagos as $pago) {
             if (!is_array($pago)) continue;
 
@@ -1886,7 +2322,6 @@ class PrinterController
             if ($metodo === '') $metodo = 'Otro';
             $monto = (float)($pago['monto'] ?? 0);
             $esPropina = strtoupper((string)($pago['tipo'] ?? 'SALE')) === 'TIP';
-            $sumaPagos += $monto;
 
             /* El nombre solo aparece cuando la cuenta se dividió por persona:
              * es lo que permite reclamar "yo pagué mi parte con tarjeta". */
@@ -1899,14 +2334,7 @@ class PrinterController
             $this->printTwoColumnLine($printer, $etiqueta, $this->formatMoney($monto), $W);
         }
 
-        /* Con un solo pago la suma es el mismo número de arriba y solo estorba;
-         * con varios es justo lo que se quiere verificar de un vistazo. */
-        if (count($pagos) > 1) {
-            $printer->text(str_repeat('-', $W) . "\n");
-            $printer->setEmphasis(true);
-            $this->printTwoColumnLine($printer, 'TOTAL PAGADO', $this->formatMoney($sumaPagos), $W);
-            $printer->setEmphasis(false);
-        }
+        $printer->text(str_repeat('=', $W) . "\n");
     }
 
     /**
@@ -2442,7 +2870,7 @@ class PrinterController
             $printer = new Printer($connector);
 
             // Inicializar impresora
-            $printer->initialize();
+            $this->iniciarTicket($printer);
             $printer->setJustification(Printer::JUSTIFY_LEFT);
 
             // Procesar cada elemento del template
@@ -2925,7 +3353,7 @@ class PrinterController
         $descuentoOrden = $data['descuentoOrden'] ?? null;
         $splits = $data['splits'] ?? [];
 
-        $printer->initialize();
+        $this->iniciarTicket($printer);
 
         /* ===== Cabecera Restaurante ===== */
         $printer->setJustification(Printer::JUSTIFY_CENTER);
@@ -3133,7 +3561,7 @@ class PrinterController
         $personalTotal = $amount + $tipAmount;
         $method = (string)($split['paymentMethod'] ?? '');
 
-        $printer->initialize();
+        $this->iniciarTicket($printer);
 
         /* Header del voucher */
         $printer->setJustification(Printer::JUSTIFY_CENTER);
