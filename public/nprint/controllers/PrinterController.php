@@ -180,7 +180,7 @@ class PrinterController
                             $printer->setUnderline($fontUnderline === 'underline');
                             if (isset($item['leftText']) && isset($item['rightText'])) {
                                 // Imprimir en dos columnas
-                                $this->printTwoColumnLine($printer, $item['leftText'], $item['rightText']);
+                                $this->printTwoColumnLine($printer, $item['leftText'], $item['rightText'], $caracteres);
                             } else {
                                 $text = $item['text'] ?? '';
                                 if (is_array($text)) {
@@ -220,14 +220,14 @@ class PrinterController
                                 // Obtener valores de los campos
                                 $leftValue = $this->getFieldValue($data, $item['leftField']);
                                 $rightValue = $this->getFieldValue($data, $item['rightField']);
-                                $this->printTwoColumnLine($printer, $leftValue, $rightValue);
+                                $this->printTwoColumnLine($printer, $leftValue, $rightValue, $caracteres);
                             } else {
                                 $field = $item['field'] ?? '';
                                 $textBefore = $item['textBefore'] ?? '';
                                 $textAfter = $item['textAfter'] ?? '';
                                 $value = $this->getFieldValue($data, $field);
                                 if (!empty($columns) && is_array($value)) {
-                                    $this->printTable($printer, $columns, $value);
+                                    $this->printTable($printer, $columns, $value, $caracteres);
                                 } else {
                                     if (is_array($value)) {
                                         $value = json_encode($value, JSON_UNESCAPED_UNICODE);
@@ -1162,7 +1162,7 @@ class PrinterController
     /** Cuerpo del comprobante de comisiones (separado de la ruta para poder probarlo sin impresora). */
     private function renderComisionesBody($printer, array $data, array $grupos, array $orden): void
     {
-        $W = 48;
+        $W = 42;
         $this->iniciarTicket($printer);
 
         $encabezado = function () use ($printer, $data) {
@@ -2386,7 +2386,7 @@ class PrinterController
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
-                    $W = 48; // ancho 80mm típico
+                    $W = 42; // ancho real: POSBANK A6e Font A = 42 col (self-test)
 
                     $this->printReceiptBody($printer, $data, $W);
 
@@ -2471,7 +2471,7 @@ class PrinterController
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
-                    $W = 48;
+                    $W = 42;
 
                     $this->printReceiptBody($printer, $data, $W);
 
@@ -2586,7 +2586,7 @@ class PrinterController
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
-                    $W = 48;
+                    $W = 42;
 
                     $this->printReceiptBody($printer, $data, $W);
 
@@ -2938,7 +2938,7 @@ class PrinterController
                         $printer->setUnderline($fontUnderline === 'underline');
                         if (isset($item['leftText']) && isset($item['rightText'])) {
                             // Imprimir en dos columnas
-                            $this->printTwoColumnLine($printer, $item['leftText'], $item['rightText']);
+                            $this->printTwoColumnLine($printer, $item['leftText'], $item['rightText'], $caracteres);
                         } else {
                             $text = $item['text'] ?? '';
                             if (is_array($text)) {
@@ -2978,14 +2978,14 @@ class PrinterController
                             // Obtener valores de los campos
                             $leftValue = $this->getFieldValue($exampleJson, $item['leftField']);
                             $rightValue = $this->getFieldValue($exampleJson, $item['rightField']);
-                            $this->printTwoColumnLine($printer, $leftValue, $rightValue);
+                            $this->printTwoColumnLine($printer, $leftValue, $rightValue, $caracteres);
                         } else {
                             $field = $item['field'] ?? '';
                             $textBefore = $item['textBefore'] ?? '';
                             $textAfter = $item['textAfter'] ?? '';
                             $value = $this->getFieldValue($exampleJson, $field);
                             if (!empty($columns) && is_array($value)) {
-                                $this->printTable($printer, $columns, $value);
+                                $this->printTable($printer, $columns, $value, $caracteres);
                             } else {
                                 if (is_array($value)) {
                                     $value = json_encode($value, JSON_UNESCAPED_UNICODE);
@@ -3100,10 +3100,8 @@ class PrinterController
     /**
      * Imprime una tabla con columnas específicas
      */
-    private function printTable($printer, $columns, $data)
+    private function printTable($printer, $columns, $data, $totalWidth = 48)
     {
-        // Calcular ancho disponible (48 caracteres para papel 80mm)
-        $totalWidth = 48;
         $colCount = count($columns);
         $colWidth = floor(($totalWidth - $colCount + 1) / $colCount); // -1 por separadores
 
@@ -3344,7 +3342,7 @@ class PrinterController
      * del TOTAL grande. Si $isFinal, muestra el método de pago de cada split. */
     private function renderConsolidatedTicket($printer, array $data, bool $isFinal): void
     {
-        $W = 48;
+        $W = 42;
 
         $rest = $data['restaurante'] ?? [];
         $ord  = $data['orden'] ?? [];
@@ -3552,7 +3550,7 @@ class PrinterController
         float $orderTotal,
         bool $isFinal
     ): void {
-        $W = 48;
+        $W = 42;
         $rest = $data['restaurante'] ?? [];
         $ord  = $data['orden'] ?? [];
         $name = (string)($split['payerName'] ?? ('Persona ' . $idx));
