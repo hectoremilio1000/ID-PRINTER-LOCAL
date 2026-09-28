@@ -275,7 +275,8 @@ class PrinterController
                     'printer_name' => $printerName,
                     'timestamp' => date('Y-m-d H:i:s')
                 ];
-            } catch (Exception $e) {
+            } catch (\Throwable $e) {
+                $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                 $results[] = [
                     'success' => 0,
                     'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -303,6 +304,28 @@ class PrinterController
     {
         $printer->initialize();
         $printer->selectCharacterTable(0);
+    }
+
+    /**
+     * Avisa a la bitácora (PrintJobLog) que este trabajo NO se imprimió.
+     *
+     * Sin esto, un error que no sea el típico "impresora apagada" (por
+     * ejemplo un TypeError al armar el ticket) deja el renglón atorado en
+     * estado "recibido": ni impreso ni marcado como fallido. Mientras dure
+     * eso (hasta 2 min, ver PrintJobLog::MS_INTENTO_MUERTO), un reenvío de la
+     * tablet por Wi-Fi intermitente con el MISMO jobUid se descarta como
+     * "ya se había impreso" aunque nunca haya salido nada — cocina se queda
+     * sin comanda y sin aviso. Marcando 'rechazado' aquí, el reenvío se
+     * reconoce al toque como una segunda oportunidad y se imprime.
+     */
+    private function marcarTrabajoFallido($jobUid, string $mensaje): void
+    {
+        $uid = is_string($jobUid) ? strtolower(trim($jobUid)) : '';
+        if (!preg_match('/^[0-9a-f-]{36}$/', $uid)) return;
+        \App\Printing\PrintJobLog::actualizar($uid, [
+            'status' => 'rechazado',
+            'message' => \App\Printing\WindowsPrintStatus::recortar($mensaje, 500),
+        ]);
     }
 
     /** 4 → "4", 0.5 → "0.5": sin ceros de más. */
@@ -672,7 +695,8 @@ class PrinterController
                         'template' => 'comanda_ticket',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -683,7 +707,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                             // Intencionalmente silencioso para no interrumpir la respuesta
                         }
                     }
@@ -692,7 +716,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -761,7 +785,8 @@ class PrinterController
                         'template' => 'cancelacion_ticket',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -772,7 +797,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                             // Intencionalmente silencioso para no interrumpir la respuesta
                         }
                     }
@@ -781,7 +806,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -852,7 +877,7 @@ class PrinterController
                         'printer_name' => $printerName,
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al abrir el cajón: ' . $e->getMessage(),
@@ -862,7 +887,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                             // Intencionalmente silencioso para no interrumpir la respuesta
                         }
                     }
@@ -871,7 +896,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -1054,7 +1079,8 @@ class PrinterController
                         'tickets_printed' => $ticketsPrinted,
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1065,7 +1091,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -1073,7 +1099,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -1164,7 +1190,8 @@ class PrinterController
                         'tickets_printed' => $n,
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1175,7 +1202,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -1183,7 +1210,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -1353,7 +1380,7 @@ class PrinterController
                     try {
                         $dt = new DateTime($createdAt);
                         $createdAtFormatted = $dt->format('d/m/Y H:i:s');
-                    } catch (Exception $e) {
+                    } catch (\Throwable $e) {
                         $createdAtFormatted = $createdAt;
                     }
                 }
@@ -1429,7 +1456,8 @@ class PrinterController
                         'template' => 'movimiento_caja',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1440,7 +1468,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -1448,7 +1476,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -1530,7 +1558,8 @@ class PrinterController
                         'template' => 'corte_x',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1541,7 +1570,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -1549,7 +1578,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -1597,7 +1626,7 @@ class PrinterController
                 $dt = new DateTime($iso);
                 $dt->setTimezone(new \DateTimeZone(date_default_timezone_get()));
                 return $dt->format('d/m/Y H:i');
-            } catch (Exception $e) {
+            } catch (\Throwable $e) {
                 return (string) $iso;
             }
         };
@@ -1895,7 +1924,8 @@ class PrinterController
                         'template' => $cerrada ? 'cierre_caja' : 'reporte_caja',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1906,7 +1936,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -1914,7 +1944,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -2435,7 +2465,8 @@ class PrinterController
                         'template' => 'consumo_ticket',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -2446,7 +2477,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -2454,7 +2485,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -2553,13 +2584,14 @@ class PrinterController
                         'template' => 'nota_venta_ticket',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = ['success' => 0, 'message' => 'Error al imprimir: ' . $e->getMessage(), 'printer_name' => $printerName, 'error_type' => 'general'];
                 } finally {
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -2567,7 +2599,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -2669,13 +2701,14 @@ class PrinterController
                         'template' => 'factura_ticket',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = ['success' => 0, 'message' => 'Error al imprimir: ' . $e->getMessage(), 'printer_name' => $printerName, 'error_type' => 'general'];
                 } finally {
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -2683,7 +2716,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
@@ -3064,13 +3097,13 @@ class PrinterController
                 'template_id' => $id,
                 'timestamp' => date('Y-m-d H:i:s')
             ]));
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error de conexión con impresora: ' . $e->getMessage(),
                 'error_type' => 'printer_connection'
             ]));
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -3342,7 +3375,8 @@ class PrinterController
                         'template' => $isFinal ? 'split_final_ticket' : 'split_preview_ticket',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
+                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -3353,7 +3387,7 @@ class PrinterController
                     if ($printer && !$printerClosed) {
                         try {
                             $printer->close();
-                        } catch (Exception $inner) {
+                        } catch (\Throwable $inner) {
                         }
                     }
                 }
@@ -3361,7 +3395,7 @@ class PrinterController
 
             $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json');
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $response->getBody()->write(json_encode([
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
