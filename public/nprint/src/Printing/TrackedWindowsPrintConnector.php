@@ -41,7 +41,7 @@ class TrackedWindowsPrintConnector extends WindowsPrintConnector
         }
         try {
             parent::__construct($dest);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $this->fallo('Nombre de impresora no válido: ' . $e->getMessage());
             throw $e;
         }
@@ -66,7 +66,7 @@ class TrackedWindowsPrintConnector extends WindowsPrintConnector
         $inicio = microtime(true);
         try {
             parent::finalize();
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $this->fallo($e->getMessage(), $inicio);
             throw $e;
         }
