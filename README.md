@@ -266,3 +266,9 @@ Consulta `LICENSE` para más detalles.
 ---
 
 Para soporte o licencias comerciales: **willyruiz95@gmail.com**
+
+## Cambios de estabilización (E-15 / E-16)
+- **No imprime medio ticket (E-15).** Si el render de un ticket falla a medias, el conector descarta lo armado (`TrackedWindowsPrintConnector::abort`) y la bitácora queda `rechazado`; el reenvío con el mismo `jobUid` sí se imprime. Antes el `finally` mandaba el buffer parcial y la bitácora quedaba `enviado`.
+- **Lista de impresoras sin `wmic` (E-16).** `GET /printers` usa PowerShell (`Get-CimInstance Win32_Printer`); `wmic` queda solo como respaldo (ya no existe en Windows 11 recientes).
+- **opcache (E-16).** `php/php.ini` activa opcache también para `php -S`. `PHP_CLI_SERVER_WORKERS` no existe en Windows, así que sigue siendo un solo proceso.
+- **Desde el mismo PC, sin Caddy.** El Edge puede hablar directo a `http://127.0.0.1:8080` (loopback) y evitar el salto HTTPS por Caddy: configurar `EDGE_ID_PRINTER_URL=http://127.0.0.1:8080`.

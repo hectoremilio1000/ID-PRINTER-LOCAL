@@ -276,7 +276,7 @@ class PrinterController
                     'timestamp' => date('Y-m-d H:i:s')
                 ];
             } catch (\Throwable $e) {
-                $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                 $results[] = [
                     'success' => 0,
                     'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -318,6 +318,18 @@ class PrinterController
      * sin comanda y sin aviso. Marcando 'rechazado' aquí, el reenvío se
      * reconoce al toque como una segunda oportunidad y se imprime.
      */
+    /**
+     * E-15: descarta lo que el conector ya había armado (no se imprime medio ticket) y marca el trabajo 'rechazado'. Con un conector que no es el rastreado
+     * (impresión de prueba, cajón) solo marca la bitácora.
+     */
+    private function abortarTrabajo($connector, $jobUid, string $mensaje): void
+    {
+        if ($connector instanceof \App\Printing\TrackedWindowsPrintConnector) {
+            $connector->abort($mensaje);
+        }
+        $this->marcarTrabajoFallido($jobUid, $mensaje);
+    }
+
     private function marcarTrabajoFallido($jobUid, string $mensaje): void
     {
         $uid = is_string($jobUid) ? strtolower(trim($jobUid)) : '';
@@ -677,6 +689,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
@@ -696,7 +709,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -767,6 +780,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
@@ -786,7 +800,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -864,6 +878,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
                 try {
                     $connector = new WindowsPrintConnector($printerName);
                     $printer = new Printer($connector);
@@ -977,6 +992,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
@@ -1080,7 +1096,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1174,6 +1190,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
@@ -1191,7 +1208,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1387,6 +1404,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
@@ -1457,7 +1475,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1539,6 +1557,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
@@ -1559,7 +1578,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -1905,6 +1924,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
@@ -1925,7 +1945,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -2445,6 +2465,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
 
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
@@ -2466,7 +2487,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),
@@ -2531,6 +2552,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
 
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
@@ -2585,7 +2607,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = ['success' => 0, 'message' => 'Error al imprimir: ' . $e->getMessage(), 'printer_name' => $printerName, 'error_type' => 'general'];
                 } finally {
                     if ($printer && !$printerClosed) {
@@ -2647,6 +2669,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
 
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
@@ -2702,7 +2725,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = ['success' => 0, 'message' => 'Error al imprimir: ' . $e->getMessage(), 'printer_name' => $printerName, 'error_type' => 'general'];
                 } finally {
                     if ($printer && !$printerClosed) {
@@ -2853,6 +2876,11 @@ class PrinterController
     {
         $printers = [];
         if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            // E-16: primero PowerShell (wmic ya no existe en Windows 11 recientes); wmic queda solo como respaldo para equipos viejos.
+            $listadas = \App\Printing\WindowsPrintStatus::listarImpresoras();
+            if (is_array($listadas)) {
+                $printers = $listadas;
+            } else {
             // Obtener detalles adicionales de las impresoras en Windows
             exec('wmic printer get Name,Shared,WorkOffline,Default,Status,Network,Availability /format:csv', $output);
             $headers = [];
@@ -2885,6 +2913,7 @@ class PrinterController
                         ];
                     }
                 }
+            }
             }
         } else {
             // Linux: obtener nombre y estado de impresoras
@@ -3340,6 +3369,7 @@ class PrinterController
 
                 $printer = null;
                 $printerClosed = false;
+                $connector = null; // E-15: que un fallo antes de crear el conector no aborte el de la vuelta anterior
 
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
@@ -3376,7 +3406,7 @@ class PrinterController
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (\Throwable $e) {
-                    $this->marcarTrabajoFallido($job['jobUid'] ?? null, $e->getMessage());
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
                     $results[] = [
                         'success' => 0,
                         'message' => 'Error al imprimir: ' . $e->getMessage(),

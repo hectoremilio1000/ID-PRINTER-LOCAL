@@ -84,6 +84,34 @@ class WindowsPrintStatus
         return function_exists('mb_substr') ? mb_substr($s, 0, $max) : substr($s, 0, $max);
     }
 
+    /**
+     * E-16 · Lista de impresoras SIN `wmic` (desaparece en Windows 11 recientes). Misma forma de texto que daba wmic ("TRUE"/"FALSE") para no cambiar el contrato con
+     * el POS. Devuelve null si PowerShell no respondió (el llamador cae a wmic, que en equipos viejos sí existe).
+     */
+    public static function listarImpresoras(): ?array
+    {
+        $script = "\$ErrorActionPreference='Stop'\n"
+            . "try { \$p = @(Get-CimInstance -ClassName Win32_Printer) } catch { \$p = @(Get-WmiObject -Class Win32_Printer) }\n"
+            . "@(\$p | ForEach-Object { [pscustomobject]@{ Name=\$_.Name; Shared=\$_.Shared; WorkOffline=\$_.WorkOffline; Default=\$_.Default; Status=\$_.Status; Network=\$_.Network; Availability=\$_.Availability } }) | ConvertTo-Json -Compress\n";
+        $r = self::powershell($script);
+        if ($r === null) return null;
+        $txt = static fn($v) => is_bool($v) ? ($v ? 'TRUE' : 'FALSE') : ($v === null ? null : (string) $v);
+        $out = [];
+        foreach (self::lista($r) as $row) {
+            if (!is_array($row) || empty($row['Name'])) continue;
+            $out[] = [
+                'name' => (string) $row['Name'],
+                'shared' => $txt($row['Shared'] ?? null),
+                'work_offline' => $txt($row['WorkOffline'] ?? null),
+                'default' => $txt($row['Default'] ?? null),
+                'status' => $txt($row['Status'] ?? null),
+                'network' => $txt($row['Network'] ?? null),
+                'availability' => $txt($row['Availability'] ?? null),
+            ];
+        }
+        return $out;
+    }
+
     /** ConvertTo-Json devuelve un objeto suelto cuando la lista trae uno solo. */
     private static function lista($v): array
     {
