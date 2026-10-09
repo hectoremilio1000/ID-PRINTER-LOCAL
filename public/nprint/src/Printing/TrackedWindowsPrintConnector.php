@@ -30,6 +30,8 @@ class TrackedWindowsPrintConnector extends WindowsPrintConnector
     private float $creadoEn;
     private ?string $documento = null;
     private ?int $bytes = null;
+    /** E-15: ya se intentó entregar (bien o mal) o se abortó: ningún otro cierre vuelve a mandar bytes a Windows. */
+    private bool $cerrado = false;
 
     public function __construct($dest, $jobUid = null)
     {
@@ -61,8 +63,22 @@ class TrackedWindowsPrintConnector extends WindowsPrintConnector
         return parent::runWrite($data, $filename);
     }
 
+    /**
+     * E-15 · El ticket falló A MEDIAS (el render lanzó una excepción): lo que ya se armó NO se manda. Antes el `finally` de cada endpoint cerraba la impresora y
+     * `finalize()` entregaba a Windows el buffer parcial (medio ticket en cocina) y la bitácora quedaba «enviado», así que el reenvío con el mismo jobUid se
+     * descartaba como duplicado y el ticket completo no salía nunca. Ahora se descarta el buffer y la bitácora queda «rechazado» (el reenvío sí se imprime).
+     */
+    public function abort(string $mensaje): void
+    {
+        if ($this->cerrado) return;
+        $this->cerrado = true;
+        $this->fallo($mensaje);
+    }
+
     public function finalize()
     {
+        if ($this->cerrado) return;
+        $this->cerrado = true;
         $inicio = microtime(true);
         try {
             parent::finalize();
