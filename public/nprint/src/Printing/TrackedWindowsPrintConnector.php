@@ -73,6 +73,11 @@ class TrackedWindowsPrintConnector extends WindowsPrintConnector
         if ($this->cerrado) return;
         $this->cerrado = true;
         $this->fallo($mensaje);
+        // El conector de la librería guarda los bytes en un arreglo PRIVADO y, si al destruirse sigue ahí, escribe un «Notice» en la respuesta HTTP (se pegaba al JSON
+        // y el Edge lo leía como respuesta inválida). Se descarta ese buffer: nada se manda a Windows y no sale ningún aviso.
+        \Closure::bind(function () {
+            $this->buffer = null;
+        }, $this, WindowsPrintConnector::class)();
     }
 
     public function finalize()
