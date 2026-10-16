@@ -32,6 +32,15 @@ $app->add(function (Request $request, $handler) {
             ->withHeader('Access-Control-Allow-Credentials', 'true')
             ->withHeader('Content-Length', '0')
             ->withStatus(204);
+        /* Private Network Access: cuando una pagina publica (https://...vercel.app)
+         * llama a una IP privada, Chrome moderno manda en el preflight
+         * `Access-Control-Request-Private-Network: true` y solo continua si se le
+         * responde `Access-Control-Allow-Private-Network: true`. Sin esto, el
+         * navegador bloquea la impresion aunque el CORS normal este bien. Solo se
+         * responde cuando el navegador lo pide; no cambia nada para quien no. */
+        if (strtolower($request->getHeaderLine('Access-Control-Request-Private-Network')) === 'true') {
+            $response = $response->withHeader('Access-Control-Allow-Private-Network', 'true');
+        }
         return $response;
     }
     return $response

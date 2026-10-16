@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!-- Plantilla. Tarea A DEMANDA (sin disparador). RunLevel Highest para poder matar los procesos que lanzo la otra tarea en la sesion de servicios. -->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Detiene ID-Printer (PHP + Caddy). A demanda: schtasks /Run /TN "ID-Print - Detener servidor"</Description>
+    <URI>\ID-Print - Detener servidor</URI>
+  </RegistrationInfo>
+  <Triggers />
+  <Principals>
+    <Principal id="Author">
+      <UserId><PC>\<USUARIO></UserId>
+      <LogonType>Password</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>"<APP>\detener_servidor.vbs" /silent</Arguments>
+      <WorkingDirectory><APP></WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
