@@ -1930,7 +1930,14 @@ class PrinterController
                     $printer = new Printer($connector);
                     $this->iniciarTicket($printer);
 
-                    $this->printReporteCajaBody($printer, $data, $cerrada);
+                    /* Cierre ciego: el back decide qué cifras ve cada rol y manda `visibility`. Sin el campo
+                     * (front viejo) sale el ticket de siempre, idéntico. */
+                    $nivel = $this->nivelVisibilidadCaja($data);
+                    if ($nivel === 'full') {
+                        $this->printReporteCajaBody($printer, $data, $cerrada);
+                    } else {
+                        $this->printReporteCajaRestringidoBody($printer, $data, $cerrada, $nivel);
+                    }
 
                     $printer->feed(3);
                     $printer->cut();
@@ -2201,6 +2208,171 @@ class PrinterController
         $div();
         $printer->setJustification(Printer::JUSTIFY_CENTER);
         $printer->text('Impreso: ' . $t($textos['impreso'] ?? date('d/m/Y H:i')) . "\n");
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+    }
+
+    /**
+     * Nivel con el que se imprime el reporte de UNA caja (cierre ciego).
+     *  - Sin `visibility` en el payload → 'full': es un front viejo y el ticket sale exactamente como antes.
+     *  - 'full' → ticket completo de siempre.
+     *  - 'blind' → solo lo que esa persona contó/declaró.
+     *  - Cualquier otro valor ('none', vacío, null, basura) → 'none': falla cerrado, nunca imprime cifras.
+     */
+    private function nivelVisibilidadCaja(array $data): string
+    {
+        if (!array_key_exists('visibility', $data)) {
+            return 'full';
+        }
+        $v = is_string($data['visibility']) ? strtolower(trim($data['visibility'])) : '';
+        if ($v === 'full' || $v === 'blind') {
+            return $v;
+        }
+        return 'none';
+    }
+
+    /**
+     * Ticket de caja para un rol Ciego ('blind') o Sin acceso ('none').
+     *
+     * Lista blanca: SOLO lee los campos de abajo. Nunca toca fondo inicial, esperado, diferencia, ventas,
+     * movimientos, operadores ni declaraciones de otros, aunque vinieran en el payload por error. Y una cifra
+     * que no llegó se imprime como "No registrado", nunca como $0.00 (un $0.00 inventado parece un dato real).
+     *
+     * Payload ciego (lo arma el back):
+     *   { visibility:"blind", mode, station:{name,code}, session:{cashUserName,openedAt,closedAt,closedByName},
+     *     counted:{closingCash, methods:[{paymentMethodName,declared}]} | null,
+     *     myDeclarations:[{paymentMethodName,declared(bool),isFinal}] (caja abierta) }
+     * más `restaurante` y `textos` (fechas ya formateadas) que agrega el front. Ejemplos en docs/CIERRE_CIEGO_TICKET.md.
+     */
+    private function printReporteCajaRestringidoBody($printer, array $data, bool $cerrada, string $nivel, int $W = 42): void
+    {
+        $t = function ($s) {
+            return $this->ticketSinAcentos($s);
+        };
+        $div = function () use ($printer, $W) {
+            $printer->text(str_repeat('-', $W) . "\n");
+        };
+        $line = function ($left, $right) use ($printer, $W, $t) {
+            $this->printTwoColumnLine($printer, $t($left), $t($right), $W);
+        };
+        /* Solo números de verdad se pintan como dinero; lo ausente se dice con palabras. */
+        $cifra = function ($v) {
+            return is_numeric($v) ? $this->formatMoney($v) : 'No registrado';
+        };
+        $fmtDT = function ($iso) {
+            if (!is_string($iso) || $iso === '') return '';
+            try {
+                $dt = new DateTime($iso);
+                $dt->setTimezone(new \DateTimeZone(date_default_timezone_get()));
+                return $dt->format('d/m/Y H:i');
+            } catch (\Throwable $e) {
+                return $iso;
+            }
+        };
+        $texto = function ($v): string {
+            return is_scalar($v) ? trim((string) $v) : '';
+        };
+
+        $station = is_array($data['station'] ?? null) ? $data['station'] : [];
+        $session = is_array($data['session'] ?? null) ? $data['session'] : [];
+        $textos = is_array($data['textos'] ?? null) ? $data['textos'] : [];
+
+        $caja = $texto($station['name'] ?? '') ?: ($texto($station['code'] ?? '') ?: '-');
+        $apertura = $texto($textos['apertura'] ?? '') ?: ($fmtDT($session['openedAt'] ?? null) ?: '-');
+        $cierre = $texto($textos['cierre'] ?? '') ?: ($fmtDT($session['closedAt'] ?? null) ?: '-');
+        $impreso = $texto($textos['impreso'] ?? '') ?: date('d/m/Y H:i');
+
+        // ── Cabecera ──
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        if ($texto($data['restaurante'] ?? '') !== '') {
+            $printer->setEmphasis(true);
+            $printer->text($t($texto($data['restaurante'])) . "\n");
+            $printer->setEmphasis(false);
+        }
+
+        // ── Sin acceso: solo que la caja se cerró y a qué hora ──
+        if ($nivel === 'none') {
+            $printer->setTextSize(1, 2);
+            $printer->setEmphasis(true);
+            $printer->text(($cerrada ? "CAJA CERRADA" : "CAJA ABIERTA") . "\n");
+            $printer->setEmphasis(false);
+            $printer->setTextSize(1, 1);
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+            $div();
+            $line('Caja', $caja);
+            if ($cerrada) {
+                $line('Cierre', $cierre);
+            }
+            $div();
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            $printer->text('Impreso: ' . $t($impreso) . "\n");
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+            return;
+        }
+
+        // ── Ciego ──
+        $printer->setTextSize(1, 2);
+        $printer->setEmphasis(true);
+        $printer->text(($cerrada ? "CIERRE DE CAJA - CIEGO" : "REPORTE DE CAJA - CIEGO") . "\n");
+        $printer->setEmphasis(false);
+        $printer->setTextSize(1, 1);
+        if (!$cerrada) {
+            $printer->text("(caja abierta)\n");
+        }
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+        $div();
+
+        $line('Caja', $caja);
+        $line('Responsable', $texto($session['cashUserName'] ?? '') ?: '-');
+        $line('Apertura', $apertura);
+        if ($cerrada) {
+            $line('Cierre', $cierre);
+            $line('Cerrada por', $texto($session['closedByName'] ?? '') ?: '-');
+        }
+        $div();
+
+        $counted = is_array($data['counted'] ?? null) ? $data['counted'] : null;
+        if ($counted !== null) {
+            $printer->setEmphasis(true);
+            $line('Efectivo contado', $cifra($counted['closingCash'] ?? null));
+            $printer->setEmphasis(false);
+            $metodos = is_array($counted['methods'] ?? null) ? $counted['methods'] : [];
+            $printer->setEmphasis(true);
+            $printer->text("DECLARADO\n");
+            $printer->setEmphasis(false);
+            if (empty($metodos)) {
+                $printer->text("Sin declaraciones.\n");
+            }
+            foreach ($metodos as $m) {
+                if (!is_array($m)) continue;
+                $line(' ' . ($texto($m['paymentMethodName'] ?? '') ?: '-'), $cifra($m['declared'] ?? null));
+            }
+            $div();
+        } elseif ($cerrada) {
+            $printer->text("Sin arqueo registrado.\n");
+            $div();
+        }
+
+        /* Caja abierta: solo si YA declaró cada método (sí/no), sin montos. */
+        $mias = is_array($data['myDeclarations'] ?? null) ? $data['myDeclarations'] : [];
+        if (!$cerrada && !empty($mias)) {
+            $printer->setEmphasis(true);
+            $printer->text("MIS DECLARACIONES\n");
+            $printer->setEmphasis(false);
+            foreach ($mias as $d) {
+                if (!is_array($d)) continue;
+                $estado = !empty($d['declared']) ? (!empty($d['isFinal']) ? 'Firmada' : 'Registrada') : 'Pendiente';
+                $line(' ' . ($texto($d['paymentMethodName'] ?? '') ?: '-'), $estado);
+            }
+            $div();
+        }
+
+        if ($cerrada) {
+            $printer->feed(2);
+            $printer->text("Firma: ________________________\n");
+            $printer->feed(1);
+        }
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        $printer->text('Impreso: ' . $t($impreso) . "\n");
         $printer->setJustification(Printer::JUSTIFY_LEFT);
     }
 
