@@ -16,6 +16,25 @@ El ticket ciego solo lee una lista blanca de campos. Nunca imprime fondo inicial
 movimientos, operadores ni declaraciones de otros, aunque vinieran en el payload. Una cifra que no llegó se imprime
 como `No registrado`, nunca como `$0.00`. El corte X (`print-corte-x`) no cambia.
 
+## ¿Esta PC ya entiende el ticket ciego? `GET /nprint/capabilities`
+
+Misma base que las rutas de impresión: si el front imprime en `${base}/nprint/printers/print-cierre-caja`
+(`base` = `restaurants.local_base_url`), consulta `GET ${base}/nprint/capabilities`. Sin auth, mismo CORS que el resto.
+
+Respuesta (200, `application/json`):
+
+```json
+{ "ok": true, "capabilities": ["cierre_caja_visibility"] }
+```
+
+Uso en el front, antes de imprimir un reporte con `visibility` distinto de `full`:
+
+- Si la respuesta es 200, JSON válido y `capabilities` incluye `"cierre_caja_visibility"` → mandar el payload ciego.
+- Cualquier otra cosa → **no soporta**: 404 (versión vieja), error de red o de CORS (en una versión vieja el 404 sale
+  sin encabezados CORS y el navegador lo reporta como `TypeError: Failed to fetch`), timeout, o JSON sin la capacidad.
+  En ese caso no imprimir el ciego: avisar "El servidor de impresión de este restaurante aún no está actualizado".
+- Se puede guardar el resultado en memoria por `base` mientras dure la sesión de la página; no hace falta persistirlo.
+
 ## Ejemplo ciego, caja cerrada (`print-cierre-caja`)
 
 ```json
