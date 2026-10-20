@@ -7,6 +7,18 @@ Archivo vivo para retomar si la sesión se corta. Lo más nuevo arriba de cada s
 - **Laboratorio:** `lab-dev` (DESKTOP-IHPELVF, Win10 19045, PS 5.1) para pruebas destructivas.
   `lab-lv1` (DESKTOP-QQVAB0U) solo lectura mientras corran las tareas `GS-Batch-L1/L2` de otra sesión.
 
+## Estado final (2026-10-20 11:10)
+
+| Categoría | Estado |
+|---|---|
+| Lista para revisión de código | **Sí** — PR Draft hectoremilio1000/ID-PRINTER-LOCAL#19 (+ pos-front #770) |
+| Validada en laboratorio | **Sí, con límites** — 50/50 unitarias, 15/15 integración, 3 reinicios, rollback (lab-lv1, Win10) |
+| Pendiente de pruebas físicas | **Sí** — arranque sin sesión, papel visto por una persona, desconexión física de impresora, Windows 8.1 |
+| Lista para solicitar autorización del piloto | **Sí** — plan en `PILOTO_ORQUIDEARIO.md`; el arranque sin sesión se cubre en el paso 6 del piloto |
+
+Laboratorio al terminar: lab-lv1 sin la tarea de prueba ni la impresora falsa; queda
+`C:\gs-wd-test\` con bitácoras y JSON de resultados. Orquideario: **sin cambios**.
+
 ## Hallazgos (verificados, con evidencia)
 
 | # | Hallazgo | Evidencia |
@@ -44,7 +56,7 @@ Archivo vivo para retomar si la sesión se corta. Lo más nuevo arriba de cada s
 - [x] Pruebas de integración en lab: 15/15 escenarios + reinicios + rollback
 - [x] Reinicios reales consecutivos (3) — [ ] sin sesión: pendiente (lab-lv1 tiene autologon; lab-dev fuera de línea)
 - [x] Integración POS: `saludIdPrinter.ts` en pos-front (rama `hector_dev/idprinter-salud`, worktree `idprinter-watchdog/pos-front`); Vitest 13/13 (Caja), node:test 4/4 (Comandero); sin cablear a la UI
-- [ ] Documentación final + PR Draft
+- [x] Documentación final + PR Draft (#19 ID-Printer, #770 pos-front; CI verde)
 
 ## Pruebas
 
