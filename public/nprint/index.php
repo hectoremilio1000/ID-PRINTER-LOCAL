@@ -123,6 +123,9 @@ $app->get('/hello/{name}', function (Request $request, Response $response, $args
 
 $app->get('/hello', [HelloController::class, 'index']);
 
+// Salud del ID-Printer (servidor, Spooler, impresoras) para el POS. Ver HealthController.
+$app->get('/health', [\App\Controllers\HealthController::class, 'index']);
+
 // Rutas de impresoras
 $app->group('/printers', function ($group) {
     $group->get('', [PrinterController::class, 'list']);
