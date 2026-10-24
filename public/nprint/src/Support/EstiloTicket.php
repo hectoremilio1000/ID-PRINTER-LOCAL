@@ -5,7 +5,9 @@ namespace App\Support;
 use Mike42\Escpos\Printer;
 
 /**
- * Estilo de ticket por restaurante (contrato v1, rama estilos-impresion).
+ * Estilo de ticket por restaurante (contrato v1 y v2, ramas estilos-impresion / estilos-impresion-v2).
+ *
+ * v2 agrega `campos` (mostrar sí/no por campo del catálogo CatalogoTicket, p. ej. {"propina": false}); v1 sigue válido.
  *
  * El front manda `data.style` ya resuelto (el diseño publicado en la nube) y el controlador lo
  * aplica por PARTE (titulo, encabezado, detalle, totales, pie). Regla de oro: un `style` ausente,
@@ -49,7 +51,7 @@ final class EstiloTicket
     {
         if (!is_array($data)) return null;
         $style = $data['style'] ?? null;
-        if (!is_array($style) || ($style['v'] ?? null) !== 1) return null;
+        if (!is_array($style) || !in_array($style['v'] ?? null, [1, 2], true)) return null;
 
         $columnas = self::entero($style['columnas'] ?? null);
         if ($columnas !== null && !in_array($columnas, self::COLUMNAS, true)) $columnas = null;
@@ -72,8 +74,43 @@ final class EstiloTicket
             }
         }
 
-        if ($columnas === null && !$partes) return null;
-        return ['columnas' => $columnas, 'partes' => $partes];
+        /* `campos` (v2): mapa clave => bool. Aquí solo se conservan las entradas booleanas; la validez de cada clave
+         * se resuelve contra el catálogo del tipo de ticket en campo()/visible() (una clave que no es del tipo no hace nada). */
+        $campos = [];
+        $crudos = $style['campos'] ?? null;
+        if (is_array($crudos)) {
+            foreach ($crudos as $clave => $valor) {
+                if (is_string($clave) && is_bool($valor)) $campos[$clave] = $valor;
+            }
+        }
+
+        if ($columnas === null && !$partes && !$campos) return null;
+        return ['columnas' => $columnas, 'partes' => $partes, 'campos' => $campos];
+    }
+
+    /**
+     * Valor EXPLÍCITO del campo en el estilo, o null si el estilo no lo trae (o la clave no es del catálogo del tipo).
+     * Un campo obligatorio (`obl`) siempre responde true: el `false` se ignora y se imprime siempre.
+     */
+    public static function campo(?array $estilo, string $docType, string $key): ?bool
+    {
+        if ($estilo === null) return null;
+        $def = CatalogoTicket::CAMPOS[$docType][$key] ?? null;
+        if ($def === null) return null;
+        if ($def['obl']) return true;
+        return array_key_exists($key, $estilo['campos'] ?? []) ? $estilo['campos'][$key] : null;
+    }
+
+    /**
+     * ¿Se imprime este campo? Con estilo: su valor si lo trae, y si no, el `def` del catálogo (= lo que se imprime hoy).
+     * Sin estilo, o con una clave que no es del catálogo del tipo: true (se imprime como siempre).
+     */
+    public static function visible(?array $estilo, string $docType, string $key): bool
+    {
+        $def = CatalogoTicket::CAMPOS[$docType][$key] ?? null;
+        if ($def === null) return true;
+        $v = self::campo($estilo, $docType, $key);
+        return $v ?? (bool) $def['def'];
     }
 
     /** Valores efectivos de una parte: el default de hoy con lo válido del estilo encima. */
