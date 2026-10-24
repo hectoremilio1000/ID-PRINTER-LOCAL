@@ -505,13 +505,44 @@ class PrinterController
          * sale el ticket de siempre. */
         $esAntro = !$esCancelacion && (int) ($data['tipo'] ?? 1) === 2;
 
+        /* Estilo por restaurante (data.style, contrato v1). null = sin estilo válido: sale el ticket de
+         * siempre, byte por byte. $wSep es el largo de las rayas (48 de siempre). */
+        $est = \App\Support\EstiloTicket::normalizar($data);
+        $wSep = $est['columnas'] ?? 48;
+        $pd = null;
+        $pe = null;
+        $negE = false;
+
         $this->iniciarTicket($printer);
-        $printer->setJustification(Printer::JUSTIFY_CENTER);
-        $printer->setTextSize(2, 2);
+        if ($est === null) {
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            $printer->setTextSize(2, 2);
+        } else {
+            \App\Support\EstiloTicket::fijar($printer, \App\Support\EstiloTicket::parte($est, 'titulo', ['ancho' => 2, 'alto' => 2, 'negrita' => false, 'alineacion' => 'centro']));
+        }
         $printer->text($esCancelacion ? "** CANCELACION **\n" : "COMANDA TICKET\n");
         $printer->feed(1);
-        $printer->setTextSize(1, 2); // un poco mas grande que el tamaño normal, sin duplicar el ancho
-        $printer->setJustification(Printer::JUSTIFY_LEFT);
+        if ($est === null) {
+            $printer->setTextSize(1, 2); // un poco mas grande que el tamaño normal, sin duplicar el ancho
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+        } else {
+            $pe = \App\Support\EstiloTicket::parte($est, 'encabezado', ['ancho' => 1, 'alto' => 2, 'negrita' => false, 'alineacion' => 'izq']);
+            $negE = (bool) $pe['negrita'];
+            \App\Support\EstiloTicket::fijar($printer, $pe);
+            $pd = \App\Support\EstiloTicket::parte($est, 'detalle', $esAntro
+                ? ['ancho' => 2, 'alto' => 2, 'negrita' => false, 'alineacion' => 'izq']
+                : ['ancho' => 1, 'alto' => 2, 'negrita' => false, 'alineacion' => 'izq']);
+        }
+        /* Raya de 48 (o de `columnas`): con estilo siempre a tamaño normal para no desbordar el papel */
+        $raya = function () use ($printer, $est, $wSep, $pe) {
+            if ($est !== null) {
+                $printer->setTextSize(1, 1);
+                $printer->setEmphasis(false);
+                $printer->setJustification(Printer::JUSTIFY_LEFT);
+            }
+            $printer->text(str_repeat('-', $wSep) . "\n");
+            if ($est !== null) \App\Support\EstiloTicket::fijar($printer, $pe);
+        };
 
         $printer->text("Area: " . ($data['areaName'] ?? '') . "\n");
         $printer->text("Mesa: " . ($data['tableName'] ?? '') . "\n");
@@ -534,16 +565,16 @@ class PrinterController
             if ($cancelaPor !== '') {
                 $printer->text("Cancelo: " . $cancelaPor . "\n");
             }
-            $printer->text(str_repeat('-', 48) . "\n");
+            $raya();
             $motivo = trim((string)($data['reason'] ?? ''));
             /* El motivo es lo primero que busca cocina cuando le llega esto:
              * sin él, el ticket solo genera una pregunta a gritos. */
             $printer->setEmphasis(true);
             $printer->text("Motivo: " . ($motivo !== '' ? $motivo : 'Sin motivo') . "\n");
-            $printer->setEmphasis(false);
+            $printer->setEmphasis($negE);
         }
 
-        $printer->text(str_repeat('-', 48) . "\n");
+        $raya();
         $printer->text($esCancelacion ? "NO PREPARAR / RETIRAR: \n" : "Pedidos: \n");
 
         $rawItems = $data['items'] ?? [];
@@ -579,7 +610,8 @@ class PrinterController
             });
 
             foreach ($mainItems as $item) {
-                $printer->text(str_repeat('-', 48) . "\n");
+                $raya();
+                if ($pd !== null) \App\Support\EstiloTicket::fijar($printer, $pd);
 
                 if (!$esAntro) {
                     $courseLabel = $this->formatCourseLabel($item['course'] ?? null);
@@ -609,17 +641,24 @@ class PrinterController
                      * el producto en NEGRITA solo cuando lleva modificadores; los modificadores, normales.
                      * La mitad solo se escribe cuando no es "TODO", y la nota del modificador, si trae,
                      * va entre paréntesis para que no se pierda. */
-                    $segmentos = [[$itemLine, !empty($modsAgrupados), true]];
+                    $negD = $pd !== null && $pd['negrita'];
+                    $segmentos = [[$itemLine, !empty($modsAgrupados) || $negD, true]];
                     foreach ($modsAgrupados as $m) {
                         $etiqueta = $this->etiquetaModificador($m);
                         if ($m['notes'] !== '') {
                             $etiqueta .= ' (' . $m['notes'] . ')';
                         }
-                        $segmentos[] = [', ** ' . $etiqueta . ' **', false, true];
+                        $segmentos[] = [', ** ' . $etiqueta . ' **', $negD, true];
                     }
-                    $printer->setTextSize(2, 2);
-                    $this->imprimirParrafo($printer, $segmentos, 24);
-                    $printer->setTextSize(1, 2);
+                    if ($est === null) {
+                        $printer->setTextSize(2, 2);
+                        $this->imprimirParrafo($printer, $segmentos, 24);
+                        $printer->setTextSize(1, 2);
+                    } else {
+                        \App\Support\EstiloTicket::fijar($printer, $pd);
+                        $this->imprimirParrafo($printer, $segmentos, \App\Support\EstiloTicket::columnasEfectivas($wSep, $pd['ancho']));
+                        \App\Support\EstiloTicket::fijar($printer, array_merge($pd, ['ancho' => 1, 'negrita' => false]));
+                    }
                 } else {
                     $printer->text($itemLine . "\n");
                 }
@@ -641,6 +680,11 @@ class PrinterController
 
                 $printer->text("\n");
             }
+        }
+
+        /* Impresión de prueba del editor de estilos (data.pruebaEstilo === true) */
+        if (\App\Support\EstiloTicket::esPrueba($data)) {
+            \App\Support\EstiloTicket::imprimirPrueba($printer, $est);
         }
     }
 
@@ -2239,25 +2283,60 @@ class PrinterController
         $propina = (float)($tot['propina'] ?? 0);
         $consumo = isset($tot['consumo']) ? (float)$tot['consumo'] : null;
 
+        /* Estilo por restaurante (data.style, contrato v1). null = sin estilo válido: se imprime
+         * EXACTAMENTE como siempre. Con estilo, $wSep / $wDet / $colsItems / $wPie reemplazan al
+         * ancho fijo de cada parte; en el camino legacy valen lo mismo que antes. */
+        $est = \App\Support\EstiloTicket::normalizar($data);
+        $wSep = $W;
+        $wDet = $W;
+        $colsItems = null;
+        $pieP = null;
+        $wPie = null;
+        $pd = null;
+
         $this->iniciarTicket($printer);
 
         /* ===== Cabecera Restaurante ===== */
-        $printer->setJustification(Printer::JUSTIFY_CENTER);
-        $printer->setTextSize(2, 2);
-        $printer->setEmphasis(true);
-        $printer->text(($rest['nombre'] ?? '') . "\n");
-        $printer->setEmphasis(false);
+        if ($est === null) {
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            $printer->setTextSize(2, 2);
+            $printer->setEmphasis(true);
+            $printer->text(($rest['nombre'] ?? '') . "\n");
+            $printer->setEmphasis(false);
 
-        $printer->setTextSize(1, 1);
+            $printer->setTextSize(1, 1);
+        } else {
+            $wSep = $est['columnas'] ?? $W;
+            $pt = \App\Support\EstiloTicket::parte($est, 'titulo', ['ancho' => 2, 'alto' => 2, 'negrita' => true, 'alineacion' => 'centro']);
+            \App\Support\EstiloTicket::fijar($printer, $pt);
+            $printer->text(($rest['nombre'] ?? '') . "\n");
+            $pe = \App\Support\EstiloTicket::parte($est, 'encabezado', ['ancho' => 1, 'alto' => 1, 'negrita' => false, 'alineacion' => 'centro']);
+            \App\Support\EstiloTicket::fijar($printer, $pe);
+        }
         if (!empty($rest['rfc'])) $printer->text($rest['rfc'] . "\n");
         if (!empty($rest['cp']))  $printer->text("CP " . $rest['cp'] . "\n");
         if (!empty($rest['direccion'])) $printer->text($rest['direccion'] . "\n");
         if (!empty($rest['tel'])) $printer->text("TEL: " . $rest['tel'] . "\n");
 
-        $printer->text(str_repeat('=', $W) . "\n");
+        if ($est !== null) {
+            /* la raya va a tamaño normal para que cubra el papel sin desbordar */
+            $printer->setTextSize(1, 1);
+            $printer->setEmphasis(false);
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+        }
+        $printer->text(str_repeat('=', $wSep) . "\n");
 
         /* ===== Bloque Orden ===== */
         $printer->setJustification(Printer::JUSTIFY_LEFT);
+        if ($est !== null) {
+            $pd = \App\Support\EstiloTicket::parte($est, 'detalle', ['ancho' => 1, 'alto' => 1, 'negrita' => false, 'alineacion' => 'izq']);
+            \App\Support\EstiloTicket::fijar($printer, $pd);
+            /* Sin `columnas` y a ancho 1 la tabla conserva sus anchos de siempre (colsItems = null) */
+            if ($est['columnas'] !== null || $pd['ancho'] > 1) {
+                $wDet = \App\Support\EstiloTicket::columnasEfectivas($est['columnas'] ?? $W, $pd['ancho']);
+                $colsItems = $wDet;
+            }
+        }
 
         $printer->text("MESA:" . ($ord['mesa'] ?? '') . "\n");
         $printer->text("MESERO:" . ($ord['mesero'] ?? '') . "\n");
@@ -2266,7 +2345,7 @@ class PrinterController
             $printer,
             "PERSONAS:" . (string)($ord['personas'] ?? ''),
             "ORDEN:" . (string)($ord['orden'] ?? ''),
-            $W
+            $wDet
         );
 
         $printer->text("FOLIO:" . ($ord['folioSerie'] ?? '') . ' N°:' . ($ord['folioNumber'] ?? '') . "\n");
@@ -2280,16 +2359,17 @@ class PrinterController
 
         $printer->text("CAJERO:" . ($ord['cajero'] ?? '') . "\n");
 
-        $printer->text(str_repeat('=', $W) . "\n");
+        $printer->text(str_repeat('=', $wSep) . "\n");
 
         /* ===== Encabezado Tabla ===== */
+        $wDescCol = $colsItems === null ? 31 : max(6, $colsItems - 5 - 1 - 1 - 10);
         $printer->setEmphasis(true);
         $header =
             str_pad("CANT.", 5) . " " .
-            str_pad("DESCRIPCION", 31) . " " .
+            str_pad("DESCRIPCION", $wDescCol) . " " .
             str_pad("IMPORTE", 10, " ", STR_PAD_LEFT);
         $printer->text($header . "\n");
-        $printer->setEmphasis(false);
+        $printer->setEmphasis($pd === null ? false : (bool)$pd['negrita']);
 
         /* ===== Items ===== */
         if (!is_array($items) || empty($items)) {
@@ -2307,21 +2387,21 @@ class PrinterController
                     $desc = $desc . ' [CORTESIA]';
                 }
 
-                $this->printItemRow($printer, $qty, $desc, $imp, $W);
+                $this->printItemRow($printer, $qty, $desc, $imp, $W, $colsItems);
 
                 // Imprimir línea de descuento por item si aplica
                 $descuento = isset($it['descuento']) ? (float)$it['descuento'] : 0;
                 $descuentoLabel = (string)($it['descuentoLabel'] ?? '');
                 if ($descuento > 0 && $descuentoLabel !== '') {
                     $discLine = str_pad('', 6) .
-                        str_pad($descuentoLabel, 30) . ' ' .
+                        str_pad($descuentoLabel, $colsItems === null ? 30 : max(6, $colsItems - 6 - 1 - 10)) . ' ' .
                         str_pad('-' . $this->formatMoney($descuento), 10, ' ', STR_PAD_LEFT);
                     $printer->text($discLine . "\n");
                 }
             }
         }
 
-        $printer->text(str_repeat('-', $W) . "\n");
+        $printer->text(str_repeat('-', $wSep) . "\n");
 
         /* ===== Descuento de orden ===== */
         if (is_array($descuentoOrden) && ($descuentoOrden['monto'] ?? 0) > 0) {
@@ -2338,9 +2418,9 @@ class PrinterController
                 $printer,
                 $dLabel,
                 '-' . $this->formatMoney($dMonto),
-                $W
+                $wDet
             );
-            $printer->text(str_repeat('-', $W) . "\n");
+            $printer->text(str_repeat('-', $wSep) . "\n");
         }
 
         /* ===== Totales, en este orden =====
@@ -2350,53 +2430,78 @@ class PrinterController
          * payload es el que debe sacar la base del CONSUMO, no del total cobrado. Aquí no se recalcula
          * nada. "TOTAL CONSUMO" y "PROPINA" solo salen cuando hubo propina: sin ella, TOTAL CONSUMO
          * sería el mismo número que el TOTAL grande de abajo. */
-        $this->printTwoColumnLine($printer, 'SUBTOTAL', $this->formatMoney($tot['subtotal'] ?? 0), $W);
-        $this->printTwoColumnLine($printer, 'IVA', $this->formatMoney($tot['iva'] ?? 0), $W);
+        if ($pd !== null) \App\Support\EstiloTicket::fijar($printer, $pd);
+        $this->printTwoColumnLine($printer, 'SUBTOTAL', $this->formatMoney($tot['subtotal'] ?? 0), $wDet);
+        $this->printTwoColumnLine($printer, 'IVA', $this->formatMoney($tot['iva'] ?? 0), $wDet);
         if ($propina > 0) {
             $this->printTwoColumnLine(
                 $printer,
                 'TOTAL CONSUMO',
                 $this->formatMoney($consumo !== null ? $consumo : (($tot['total'] ?? 0) - $propina)),
-                $W
+                $wDet
             );
-            $this->printTwoColumnLine($printer, 'PROPINA', $this->formatMoney($propina), $W);
+            $this->printTwoColumnLine($printer, 'PROPINA', $this->formatMoney($propina), $wDet);
         }
-        $printer->text(str_repeat('-', $W) . "\n");
+        if ($est !== null) {
+            $printer->setTextSize(1, 1);
+            $printer->setEmphasis(false);
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+        }
+        $printer->text(str_repeat('-', $wSep) . "\n");
 
         /* ===== TOTAL grande ===== */
-        $printer->setJustification(Printer::JUSTIFY_CENTER);
-        $printer->setTextSize(2, 2);
+        if ($est === null) {
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            $printer->setTextSize(2, 2);
+        } else {
+            \App\Support\EstiloTicket::fijar($printer, \App\Support\EstiloTicket::parte($est, 'totales', ['ancho' => 2, 'alto' => 2, 'negrita' => false, 'alineacion' => 'centro']));
+        }
         $printer->text("TOTAL: " . $this->formatMoney($tot['total'] ?? 0) . "\n");
         $printer->setTextSize(1, 1);
         $printer->setJustification(Printer::JUSTIFY_LEFT);
+        if ($est !== null) $printer->setEmphasis(false);
 
-        $printer->text(str_repeat('-', $W) . "\n");
+        $printer->text(str_repeat('-', $wSep) . "\n");
+
+        if ($est !== null) {
+            $pieP = \App\Support\EstiloTicket::parte($est, 'pie', ['ancho' => 1, 'alto' => 1, 'negrita' => false, 'alineacion' => 'izq']);
+            $wPie = \App\Support\EstiloTicket::columnasEfectivas($est['columnas'] ?? $W, $pieP['ancho']);
+        }
 
         /* ===== Total en letra =====
          * Solo si de verdad trae LETRAS. Los tres fronts mandan hoy el importe como número ("253.00",
          * un placeholder que nunca se implementó) y salía repetido justo debajo del TOTAL grande. */
         $enLetra = trim((string)($tot['totalEnLetra'] ?? ''));
         if ($enLetra !== '' && preg_match('/\p{L}/u', $enLetra)) {
+            if ($pieP !== null) \App\Support\EstiloTicket::fijar($printer, $pieP);
             $printer->text($enLetra . "\n\n");
         }
 
         /* ===== Formas de pago ===== */
-        $this->printFormaDePago($printer, $pagos, $W);
+        $this->printFormaDePago($printer, $pagos, $W, $pieP, $wPie, $wSep);
+
+        /* Impresión de prueba del editor de estilos (data.pruebaEstilo === true) */
+        if (\App\Support\EstiloTicket::esPrueba($data)) {
+            \App\Support\EstiloTicket::imprimirPrueba($printer, $est);
+        }
     }
 
     /* Desglose de cómo se pagó: una línea por pago, separando propina.
      * No imprime nada si no vienen pagos — así el ticket de cuenta previo al
      * cobro no lleva este bloque. Ya NO imprime "TOTAL PAGADO": esa suma es el
      * TOTAL grande de arriba y repetirla solo estorbaba. */
-    private function printFormaDePago($printer, array $pagos, int $W): void
+    private function printFormaDePago($printer, array $pagos, int $W, ?array $pieP = null, ?int $wPie = null, ?int $wSep = null): void
     {
         if (empty($pagos)) return;
 
+        /* Con estilo, el título sigue en negrita y centrado a tamaño normal; los renglones usan el estilo del pie */
+        if ($pieP !== null) $printer->setTextSize(1, 1);
         $printer->setEmphasis(true);
         $printer->setJustification(Printer::JUSTIFY_CENTER);
         $printer->text("FORMAS DE PAGO\n");
         $printer->setJustification(Printer::JUSTIFY_LEFT);
         $printer->setEmphasis(false);
+        if ($pieP !== null) \App\Support\EstiloTicket::fijar($printer, $pieP);
 
         foreach ($pagos as $pago) {
             if (!is_array($pago)) continue;
@@ -2414,10 +2519,15 @@ class PrinterController
             if ($payerName !== '') $etiqueta .= ' - ' . $payerName;
             if ($esPropina) $etiqueta .= ' (PROPINA)';
 
-            $this->printTwoColumnLine($printer, $etiqueta, $this->formatMoney($monto), $W);
+            $this->printTwoColumnLine($printer, $etiqueta, $this->formatMoney($monto), $wPie ?? $W);
         }
 
-        $printer->text(str_repeat('=', $W) . "\n");
+        if ($pieP !== null) {
+            $printer->setTextSize(1, 1);
+            $printer->setEmphasis(false);
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+        }
+        $printer->text(str_repeat('=', $wSep ?? $W) . "\n");
     }
 
     /**
@@ -2752,11 +2862,15 @@ class PrinterController
      * Imprime una fila de item tipo: [CANT] [DESCRIPCION] [IMPORTE]
      * Con wrap de descripción si se pasa del ancho.
      */
-    private function printItemRow($printer, $qty, $desc, $importe, $totalWidth = 48)
+    private function printItemRow($printer, $qty, $desc, $importe, $totalWidth = 48, ?int $cols = null)
     {
         $wQty = 5;
         $wDesc = 31;
         $wImp = 10;
+        /* Con estilo (columnas efectivas a ese tamaño de letra) la descripción se ajusta al ancho */
+        if ($cols !== null) {
+            $wDesc = max(6, $cols - $wQty - $wImp - 2);
+        }
 
         $qtyStr = (string)$qty;
         $impStr = $this->formatMoney($importe);
