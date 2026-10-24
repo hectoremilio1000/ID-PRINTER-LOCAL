@@ -1,14 +1,24 @@
 # Caddyfile para proxy HTTPS a PHP
 {
     auto_https off
-    admin off
+    # Solo en esta PC (127.0.0.1): permite que el Edge recargue el certificado sin reiniciar el servidor de impresión.
+    admin 127.0.0.1:2119
 }
 
-:9443 {
-    tls cert/certificado.pem cert/llave.pem
+(servidor) {
     reverse_proxy 127.0.0.1:8080
     encode gzip
     log {
         output file logs/access.log
     }
 }
+
+# Certificado de siempre (mkcert, por IP).
+:9443 {
+    tls cert/certificado.pem cert/llave.pem
+    import servidor
+}
+
+# Certificado público por restaurante: cuando el Edge lo tiene listo deja aquí cert/publico/sitio.caddy
+# con el bloque del nombre del restaurante. Sin ese archivo no pasa nada y todo sigue con el de arriba.
+import cert/publico/*.caddy
