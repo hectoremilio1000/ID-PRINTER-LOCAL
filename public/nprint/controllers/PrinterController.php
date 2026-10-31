@@ -545,13 +545,14 @@ class PrinterController
                 : ['ancho' => 1, 'alto' => 2, 'negrita' => false, 'alineacion' => 'izq']);
         }
         /* Raya de 48 (o de `columnas`): con estilo siempre a tamaño normal para no desbordar el papel */
-        $raya = function () use ($printer, $est, $wSep, $pe) {
+        $raya = function () use ($printer, $est, $wSep, $pe, $V) {
             if ($est !== null) {
                 $printer->setTextSize(1, 1);
                 $printer->setEmphasis(false);
                 $printer->setJustification(Printer::JUSTIFY_LEFT);
             }
-            $printer->text(str_repeat('-', $wSep) . "\n");
+            /* `divisores` (def true = lo de hoy): apagado, la línea se cambia por un renglón en blanco */
+            $printer->text($V('divisores') ? str_repeat('-', $wSep) . "\n" : "\n");
             if ($est !== null) \App\Support\EstiloTicket::fijar($printer, $pe);
         };
 
@@ -567,7 +568,11 @@ class PrinterController
         /* El número de orden ya no se imprime a propósito: a cocina lo
          * confundía con el número de mesa. El front lo sigue mandando (se
          * quitará ahí más adelante); aquí simplemente se ignora. */
-        if ($V('fecha')) $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
+        /* Fecha y hora son dos campos: juntas (= lo de hoy), solo la fecha, solo la hora o ninguna */
+        $fh = \App\Support\EstiloTicket::fechaHora($est, $doc, 'fecha', 'hora', date('d/m/Y H:i:s'));
+        if (isset($fh['junto'])) $printer->text("Fecha: " . $fh['junto'] . "\n");
+        elseif (isset($fh['fecha'])) $printer->text("Fecha: " . $fh['fecha'] . "\n");
+        elseif (isset($fh['hora'])) $printer->text("Hora: " . $fh['hora'] . "\n");
 
         /* Quién y por qué. En una comanda normal no vienen estas llaves, así
          * que el ticket de cocina de siempre no cambia ni una línea. */
@@ -622,7 +627,33 @@ class PrinterController
                 return $courseA <=> $courseB;
             });
 
+            /* `comensales` (def false: solo si el estilo lo ENCIENDE y la comanda trae `seatNo`): los productos se agrupan bajo
+             * «COMENSAL N» y al final «MESA» (sin comensal). Dentro de cada grupo conservan el orden por tiempo. Sin `seatNo` en
+             * ningún renglón, la comanda sale como siempre aunque el campo esté encendido. */
+            $porComensal = !$esCancelacion && \App\Support\EstiloTicket::campo($est, 'comanda', 'comensales') === true;
+            $asiento = function ($it) {
+                $n = (int) ($it['seatNo'] ?? 0);
+                return $n >= 1 ? $n : null;
+            };
+            if ($porComensal) {
+                $hayAsientos = false;
+                foreach ($mainItems as $it) { if ($asiento($it) !== null) { $hayAsientos = true; break; } }
+                $porComensal = $hayAsientos;
+            }
+            if ($porComensal) {
+                usort($mainItems, function ($a, $b) use ($asiento) {
+                    return ($asiento($a) ?? PHP_INT_MAX) <=> ($asiento($b) ?? PHP_INT_MAX);
+                });
+            }
+            $asientoActual = false;
+
             foreach ($mainItems as $item) {
+                if ($porComensal && $asiento($item) !== $asientoActual) {
+                    $asientoActual = $asiento($item);
+                    $printer->setEmphasis(true);
+                    $printer->text($asientoActual === null ? "MESA\n" : "COMENSAL " . $asientoActual . "\n");
+                    $printer->setEmphasis($negE);
+                }
                 $raya();
                 if ($pd !== null) \App\Support\EstiloTicket::fijar($printer, $pd);
 
@@ -2654,7 +2685,11 @@ class PrinterController
             $printer->setEmphasis(false);
             $printer->setJustification(Printer::JUSTIFY_CENTER);
         }
-        $printer->text(str_repeat('=', $wSep) . "\n");
+        $linea = function (string $ch) use ($printer, $wSep, $V) {
+            /* `divisores` (def true = lo de hoy): apagado, la línea se cambia por un renglón en blanco */
+            $printer->text($V('divisores') ? str_repeat($ch, $wSep) . "\n" : "\n");
+        };
+        $linea('=');
 
         /* ===== Bloque Orden ===== */
         $printer->setJustification(Printer::JUSTIFY_LEFT);
@@ -2682,16 +2717,23 @@ class PrinterController
 
         if ($V('folio')) $printer->text("FOLIO:" . ($ord['folioSerie'] ?? '') . ' N°:' . ($ord['folioNumber'] ?? '') . "\n");
 
-        if (!empty($ord['fechaCreacion']) && $V('fecha_creacion')) {
-            $printer->text('Fecha Creacion: ' . $ord['fechaCreacion'] . "\n");
+        /* Fecha y hora son dos campos: juntas (= lo de hoy), solo la fecha, solo la hora o ninguna */
+        if (!empty($ord['fechaCreacion'])) {
+            $fh = \App\Support\EstiloTicket::fechaHora($est, $docType, 'fecha_creacion', 'hora_creacion', (string) $ord['fechaCreacion']);
+            if (isset($fh['junto'])) $printer->text('Fecha Creacion: ' . $fh['junto'] . "\n");
+            elseif (isset($fh['fecha'])) $printer->text('Fecha Creacion: ' . $fh['fecha'] . "\n");
+            elseif (isset($fh['hora'])) $printer->text('Hora Creacion: ' . $fh['hora'] . "\n");
         }
-        if (!empty($ord['fechaImpresion']) && $V('fecha_impresion')) {
-            $printer->text('Fecha Impresión: ' . $ord['fechaImpresion'] . "\n");
+        if (!empty($ord['fechaImpresion'])) {
+            $fh = \App\Support\EstiloTicket::fechaHora($est, $docType, 'fecha_impresion', 'hora_impresion', (string) $ord['fechaImpresion']);
+            if (isset($fh['junto'])) $printer->text('Fecha Impresión: ' . $fh['junto'] . "\n");
+            elseif (isset($fh['fecha'])) $printer->text('Fecha Impresión: ' . $fh['fecha'] . "\n");
+            elseif (isset($fh['hora'])) $printer->text('Hora Impresión: ' . $fh['hora'] . "\n");
         }
 
         if ($V('cajero')) $printer->text("CAJERO:" . ($ord['cajero'] ?? '') . "\n");
 
-        $printer->text(str_repeat('=', $wSep) . "\n");
+        $linea('=');
 
         /* ===== Encabezado Tabla ===== */
         $wDescCol = $colsItems === null ? 31 : max(6, $colsItems - 5 - 1 - 1 - 10);
@@ -2735,7 +2777,7 @@ class PrinterController
             }
         }
 
-        $printer->text(str_repeat('-', $wSep) . "\n");
+        $linea('-');
 
         /* ===== Descuento de orden ===== */
         if (is_array($descuentoOrden) && ($descuentoOrden['monto'] ?? 0) > 0 && $V('descuento_orden')) {
@@ -2754,7 +2796,30 @@ class PrinterController
                 '-' . $this->formatMoney($dMonto),
                 $wDet
             );
-            $printer->text(str_repeat('-', $wSep) . "\n");
+            $linea('-');
+        }
+
+        /* ===== Subtotal por comensal =====
+         * `desglose_por_comensal` (def false: solo si el estilo lo ENCIENDE y algún renglón trae `seatNo`): una línea por comensal con lo que
+         * consumió (suma del importe de sus renglones) y «Mesa (compartido)» para lo que no tiene comensal. */
+        if ($docType !== 'factura' && \App\Support\EstiloTicket::campo($est, $docType, 'desglose_por_comensal') === true && is_array($items)) {
+            $porAsiento = [];
+            $hayAsientos = false;
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+                $n = (int) ($it['seatNo'] ?? 0);
+                $clave = $n >= 1 ? $n : 0;
+                if ($clave > 0) $hayAsientos = true;
+                $porAsiento[$clave] = ($porAsiento[$clave] ?? 0) + (float) ($it['importe'] ?? 0);
+            }
+            if ($hayAsientos) {
+                uksort($porAsiento, function ($a, $b) { return ($a === 0 ? PHP_INT_MAX : $a) <=> ($b === 0 ? PHP_INT_MAX : $b); });
+                if ($pd !== null) \App\Support\EstiloTicket::fijar($printer, $pd);
+                foreach ($porAsiento as $clave => $monto) {
+                    $this->printTwoColumnLine($printer, $clave === 0 ? 'Mesa (compartido)' : 'Comensal ' . $clave, $this->formatMoney($monto), $wDet);
+                }
+                $linea('-');
+            }
         }
 
         /* ===== Totales, en este orden =====
@@ -2783,7 +2848,7 @@ class PrinterController
             $printer->setEmphasis(false);
             $printer->setJustification(Printer::JUSTIFY_LEFT);
         }
-        $printer->text(str_repeat('-', $wSep) . "\n");
+        $linea('-');
 
         /* ===== TOTAL grande ===== */
         if ($est === null) {
@@ -2797,7 +2862,7 @@ class PrinterController
         $printer->setJustification(Printer::JUSTIFY_LEFT);
         if ($est !== null) $printer->setEmphasis(false);
 
-        $printer->text(str_repeat('-', $wSep) . "\n");
+        $linea('-');
 
         if ($est !== null) {
             $pieP = \App\Support\EstiloTicket::parte($est, 'pie', ['ancho' => 1, 'alto' => 1, 'negrita' => false, 'alineacion' => 'izq']);
@@ -2814,7 +2879,10 @@ class PrinterController
         }
 
         /* ===== Formas de pago ===== */
-        $this->printFormaDePago($printer, $V('formas_pago') ? $pagos : [], $W, $pieP, $wPie, $wSep);
+        $this->printFormaDePago($printer, $V('formas_pago') ? $pagos : [], $W, $pieP, $wPie, $wSep, $V('divisores'));
+
+        /* Leyenda del restaurante al final de la cuenta (en la nota de venta va al final de su pie) */
+        if ($docType === 'cuenta') $this->imprimirLeyenda($printer, $est, 'cuenta', $W, $pieP);
 
         /* Impresión de prueba del editor de estilos (data.pruebaEstilo === true). La nota de venta y la factura la
          * imprimen al final de su pie ($conPrueba = false aquí). */
@@ -2827,7 +2895,7 @@ class PrinterController
      * No imprime nada si no vienen pagos — así el ticket de cuenta previo al
      * cobro no lleva este bloque. Ya NO imprime "TOTAL PAGADO": esa suma es el
      * TOTAL grande de arriba y repetirla solo estorbaba. */
-    private function printFormaDePago($printer, array $pagos, int $W, ?array $pieP = null, ?int $wPie = null, ?int $wSep = null): void
+    private function printFormaDePago($printer, array $pagos, int $W, ?array $pieP = null, ?int $wPie = null, ?int $wSep = null, bool $conLineas = true): void
     {
         if (empty($pagos)) return;
 
@@ -2864,7 +2932,53 @@ class PrinterController
             $printer->setEmphasis(false);
             $printer->setJustification(Printer::JUSTIFY_LEFT);
         }
-        $printer->text(str_repeat('=', $wSep ?? $W) . "\n");
+        $printer->text($conLineas ? str_repeat('=', $wSep ?? $W) . "\n" : "\n");
+    }
+
+    /**
+     * Imprime la leyenda del restaurante (`leyenda_pie` + `style.textos.leyenda_pie`): centrada, partida al ancho del papel y con el
+     * estilo del pie. No imprime nada si el campo está apagado o no hay texto.
+     */
+    private function imprimirLeyenda($printer, ?array $est, string $docType, int $W, ?array $pieP = null): bool
+    {
+        $texto = \App\Support\EstiloTicket::texto($est, $docType, 'leyenda_pie');
+        if ($texto === null) return false;
+        $ancho = max(1, (int) ($pieP['ancho'] ?? 1));
+        $cols = \App\Support\EstiloTicket::columnasEfectivas($est['columnas'] ?? $W, $ancho);
+        $printer->feed(1);
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        $printer->setTextSize($ancho, max(1, (int) ($pieP['alto'] ?? 1)));
+        $printer->setEmphasis((bool) ($pieP['negrita'] ?? false));
+        foreach (explode("\n", $texto) as $renglon) {
+            foreach ($this->partirRenglon($renglon, $cols) as $l) {
+                $printer->text($l . "\n");
+            }
+        }
+        $printer->setTextSize(1, 1);
+        $printer->setEmphasis(false);
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+        return true;
+    }
+
+    /** Parte un renglón en líneas de hasta $cols caracteres, por palabras; una palabra más larga que la línea se corta. */
+    private function partirRenglon(string $renglon, int $cols): array
+    {
+        $cols = max(1, $cols);
+        if (trim($renglon) === '') return [''];
+        $lineas = [];
+        $actual = '';
+        foreach (preg_split('/\s+/u', trim($renglon)) ?: [] as $palabra) {
+            while ($this->mbLen($palabra) > $cols) {
+                if ($actual !== '') { $lineas[] = $actual; $actual = ''; }
+                $lineas[] = $this->mbSub($palabra, 0, $cols);
+                $palabra = $this->mbSub($palabra, $cols);
+            }
+            if ($actual === '') $actual = $palabra;
+            elseif ($this->mbLen($actual) + 1 + $this->mbLen($palabra) <= $cols) $actual .= ' ' . $palabra;
+            else { $lineas[] = $actual; $actual = $palabra; }
+        }
+        if ($actual !== '') $lineas[] = $actual;
+        return $lineas;
     }
 
     /**
@@ -3182,6 +3296,15 @@ class PrinterController
         if (!empty($facturarUrl) && $V('qr_factura')) {
             $printer->qrCode($facturarUrl, Printer::QR_ECLEVEL_M, 6, Printer::QR_MODEL_2);
             $printer->feed(1);
+        }
+
+        /* Solo si de verdad se imprimió la leyenda se repone el estado del pie: sin ella no se manda ni un byte más que antes */
+        if ($this->imprimirLeyenda($printer, $est, 'nota_venta', 48, $pp)) {
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            if ($pp !== null) {
+                $printer->setTextSize((int) $pp['ancho'], (int) $pp['alto']);
+                $printer->setEmphasis($nb);
+            }
         }
 
         if ($V('marca')) {

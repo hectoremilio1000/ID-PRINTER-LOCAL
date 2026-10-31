@@ -102,6 +102,9 @@ foreach ($matriz as [$doc, $caso, $marcas, $obl]) {
         $ok(contiene($out, $m), "obligatorio $doc.$key=false se ignora y sigue saliendo «{$m}»: $caso");
     }
 }
+// Tickets de TACO CAPITAL: fecha/hora separadas, leyenda, divisores y comensales (marcan sus campos en $cubiertos)
+require __DIR__ . '/pruebas_tickets_taco.php';
+
 // el catálogo completo de los 11 tipos tiene prueba (salvo los de comanda/antro, que se cubren abajo)
 $pendientes = [];
 foreach (CatalogoTicket::CAMPOS as $doc => $campos) {

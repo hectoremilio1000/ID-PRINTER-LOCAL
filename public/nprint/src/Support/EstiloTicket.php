@@ -84,8 +84,20 @@ final class EstiloTicket
             }
         }
 
-        if ($columnas === null && !$partes && !$campos) return null;
-        return ['columnas' => $columnas, 'partes' => $partes, 'campos' => $campos];
+        /* `textos` (v2): texto del restaurante por campo de texto del catálogo (p. ej. `leyenda_pie`). Se limpia aquí (sin caracteres de
+         * control, máx. 200 caracteres y 4 renglones); si no cabe se ignora ese texto. Cuál campo es de texto lo decide texto(). */
+        $textos = [];
+        $crudosTextos = $style['textos'] ?? null;
+        if (is_array($crudosTextos)) {
+            foreach ($crudosTextos as $clave => $valor) {
+                if (!is_string($clave) || !is_string($valor)) continue;
+                $limpio = self::limpiarTexto($valor);
+                if ($limpio !== null) $textos[$clave] = $limpio;
+            }
+        }
+
+        if ($columnas === null && !$partes && !$campos && !$textos) return null;
+        return ['columnas' => $columnas, 'partes' => $partes, 'campos' => $campos, 'textos' => $textos];
     }
 
     /**
@@ -111,6 +123,68 @@ final class EstiloTicket
         if ($def === null) return true;
         $v = self::campo($estilo, $docType, $key);
         return $v ?? (bool) $def['def'];
+    }
+
+    public const TEXTO_MAX_CARACTERES = 200;
+    public const TEXTO_MAX_RENGLONES = 4;
+
+    /** Texto del restaurante listo para imprimir: sin caracteres de control, renglones recortados, sin renglones vacíos en las puntas. null si queda vacío o no cabe. */
+    public static function limpiarTexto(string $texto): ?string
+    {
+        $texto = preg_replace('/\r\n?/', "\n", $texto) ?? '';
+        $texto = preg_replace('/[\x00-\x09\x0B-\x1F\x7F]/', '', $texto) ?? '';
+        $renglones = array_map('trim', explode("\n", $texto));
+        while ($renglones && end($renglones) === '') array_pop($renglones);
+        while ($renglones && $renglones[0] === '') array_shift($renglones);
+        if (!$renglones || count($renglones) > self::TEXTO_MAX_RENGLONES) return null;
+        $limpio = implode("\n", $renglones);
+        if (mb_strlen($limpio, 'UTF-8') > self::TEXTO_MAX_CARACTERES) return null;
+        return $limpio;
+    }
+
+    /**
+     * Texto de un campo de texto del catálogo (p. ej. la leyenda del pie), o null si no se imprime. Solo sale si el campo es de texto en el catálogo
+     * del tipo, el estilo lo ENCENDIÓ de forma explícita (def false: sin estilo o sin la clave no sale) y hay texto.
+     */
+    public static function texto(?array $estilo, string $docType, string $key): ?string
+    {
+        $def = CatalogoTicket::CAMPOS[$docType][$key] ?? null;
+        if ($def === null || empty($def['texto'])) return null;
+        if (self::campo($estilo, $docType, $key) !== true) return null;
+        $t = $estilo['textos'][$key] ?? null;
+        return is_string($t) && $t !== '' ? $t : null;
+    }
+
+    /**
+     * Separa «dd/mm/aaaa hh:mm[:ss]» en [fecha, hora]. Acepta coma o espacio entre las dos partes y «a. m. / p. m.» (con o sin espacios
+     * de no separación). null si no se reconoce el formato: entonces se imprime completa, nunca se inventa.
+     */
+    public static function partirFechaHora(string $valor): ?array
+    {
+        $esp = '[\s\x{00A0}\x{202F}]';
+        if (preg_match('~^' . $esp . '*(\d{1,4}[/\-.]\d{1,2}[/\-.]\d{1,4})' . $esp . '*,?' . $esp . '*(\d{1,2}:\d{2}(?::\d{2})?(?:' . $esp . '*[aApP]\.?' . $esp . '?[mM]\.?)?)' . $esp . '*$~u', $valor, $m) !== 1) {
+            return null;
+        }
+        return [trim($m[1]), trim($m[2])];
+    }
+
+    /**
+     * Qué se imprime de una fecha-con-hora según sus DOS campos (fecha y hora, cada uno se enciende o apaga aparte):
+     *   fecha sí + hora sí → la fecha y la hora juntas, tal como llegan (= lo de hoy)
+     *   solo fecha → ['fecha' => 'dd/mm/aaaa']      solo hora → ['hora' => 'hh:mm:ss']      ninguna → []
+     * La hora, si el estilo no la trae guardada, hace lo mismo que su fecha: un restaurante que ya apagó la fecha no ve aparecer la hora.
+     * Si el valor no se puede separar, se imprime completo mientras alguno de los dos esté encendido.
+     * Devuelve ['junto' => valor] | ['fecha' => ..] | ['hora' => ..] | [].
+     */
+    public static function fechaHora(?array $estilo, string $docType, string $claveFecha, string $claveHora, string $valor): array
+    {
+        $f = self::visible($estilo, $docType, $claveFecha);
+        $h = self::campo($estilo, $docType, $claveHora) ?? $f;
+        if (!$f && !$h) return [];
+        if ($f && $h) return ['junto' => $valor];
+        $partes = self::partirFechaHora($valor);
+        if ($partes === null) return ['junto' => $valor];
+        return $f ? ['fecha' => $partes[0]] : ['hora' => $partes[1]];
     }
 
     /** Valores efectivos de una parte: el default de hoy con lo válido del estilo encima. */

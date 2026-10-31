@@ -4,7 +4,7 @@ namespace App\Support;
 
 final class CatalogoTicket
 {
-    /** docType => [ key => ['parte'=>..., 'def'=>bool, 'obl'=>bool] ] */
+    /** docType => [ key => ['parte'=>..., 'def'=>bool, 'obl'=>bool, 'texto'=>bool (opcional)] ] */
     public const CAMPOS = [
         'comanda' => [
             'titulo' => ['parte' => 'titulo', 'def' => true, 'obl' => true],
@@ -12,10 +12,13 @@ final class CatalogoTicket
             'mesa' => ['parte' => 'encabezado', 'def' => true, 'obl' => true],
             'mesero' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'fecha' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
+            'hora' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'tiempo' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'notas_producto' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'modificadores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'modificadores_en_linea' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'comensales' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'divisores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
         ],
         'cancelacion' => [
             'titulo' => ['parte' => 'titulo', 'def' => true, 'obl' => true],
@@ -23,11 +26,13 @@ final class CatalogoTicket
             'mesa' => ['parte' => 'encabezado', 'def' => true, 'obl' => true],
             'mesero' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'fecha' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
+            'hora' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'cancelado_por' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'motivo' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'tiempo' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'notas_producto' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'modificadores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'divisores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
         ],
         'cuenta' => [
             'restaurante_nombre' => ['parte' => 'titulo', 'def' => true, 'obl' => true],
@@ -40,11 +45,15 @@ final class CatalogoTicket
             'personas_orden' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'folio' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'fecha_creacion' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'hora_creacion' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'fecha_impresion' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'hora_impresion' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'cajero' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'divisores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'tabla_encabezado' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'descuento_item' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'descuento_orden' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'desglose_por_comensal' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
             'subtotal' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'iva' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'consumo' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
@@ -52,6 +61,7 @@ final class CatalogoTicket
             'total' => ['parte' => 'totales', 'def' => true, 'obl' => true],
             'total_letra' => ['parte' => 'pie', 'def' => true, 'obl' => false],
             'formas_pago' => ['parte' => 'pie', 'def' => true, 'obl' => false],
+            'leyenda_pie' => ['parte' => 'pie', 'def' => false, 'obl' => false, 'texto' => true],
         ],
         'nota_venta' => [
             'restaurante_nombre' => ['parte' => 'titulo', 'def' => true, 'obl' => true],
@@ -64,11 +74,15 @@ final class CatalogoTicket
             'personas_orden' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'folio' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'fecha_creacion' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'hora_creacion' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'fecha_impresion' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'hora_impresion' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'cajero' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'divisores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'tabla_encabezado' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'descuento_item' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'descuento_orden' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'desglose_por_comensal' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
             'subtotal' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'iva' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'consumo' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
@@ -80,6 +94,7 @@ final class CatalogoTicket
             'qr_factura' => ['parte' => 'pie', 'def' => true, 'obl' => false],
             'dias_para_facturar' => ['parte' => 'pie', 'def' => true, 'obl' => false],
             'marca' => ['parte' => 'pie', 'def' => true, 'obl' => false],
+            'leyenda_pie' => ['parte' => 'pie', 'def' => false, 'obl' => false, 'texto' => true],
         ],
         'factura' => [
             'restaurante_nombre' => ['parte' => 'titulo', 'def' => true, 'obl' => true],
@@ -92,8 +107,11 @@ final class CatalogoTicket
             'personas_orden' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'folio' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'fecha_creacion' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'hora_creacion' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'fecha_impresion' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'hora_impresion' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
             'cajero' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'divisores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'tabla_encabezado' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'descuento_item' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'descuento_orden' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
