@@ -564,8 +564,9 @@ class PrinterController
                 $printer->setEmphasis(false);
                 $printer->setJustification(Printer::JUSTIFY_LEFT);
             }
-            /* `divisores` (def true = lo de hoy): apagado, la línea se cambia por un renglón en blanco */
-            $printer->text($V('divisores') ? str_repeat('-', $wSep) . "\n" : "\n");
+            /* `divisores` (def true = lo de hoy): apagado, la línea se cambia por un espacio chico (no un renglón en blanco) */
+            if ($V('divisores')) $printer->text(str_repeat('-', $wSep) . "\n");
+            else \App\Support\EstiloTicket::espacioSinDivisoria($printer);
             if ($est !== null) \App\Support\EstiloTicket::fijar($printer, $pe);
         };
 
@@ -735,7 +736,8 @@ class PrinterController
                     }
                 }
 
-                $printer->text("\n");
+                /* Con divisorias apagadas el espacio entre productos lo pone `$raya()` (chico); este renglón en blanco solo con divisorias */
+                if ($V('divisores')) $printer->text("\n");
             }
         }
 
@@ -2706,8 +2708,9 @@ class PrinterController
             $printer->setJustification(Printer::JUSTIFY_CENTER);
         }
         $linea = function (string $ch) use ($printer, $wSep, $V) {
-            /* `divisores` (def true = lo de hoy): apagado, la línea se cambia por un renglón en blanco */
-            $printer->text($V('divisores') ? str_repeat($ch, $wSep) . "\n" : "\n");
+            /* `divisores` (def true = lo de hoy): apagado, la línea se cambia por un espacio chico (no un renglón en blanco) */
+            if ($V('divisores')) $printer->text(str_repeat($ch, $wSep) . "\n");
+            else \App\Support\EstiloTicket::espacioSinDivisoria($printer);
         };
         $linea('=');
 
@@ -2954,7 +2957,8 @@ class PrinterController
             $printer->setEmphasis(false);
             $printer->setJustification(Printer::JUSTIFY_LEFT);
         }
-        $printer->text($conLineas ? str_repeat('=', $wSep ?? $W) . "\n" : "\n");
+        if ($conLineas) $printer->text(str_repeat('=', $wSep ?? $W) . "\n");
+        else \App\Support\EstiloTicket::espacioSinDivisoria($printer);
     }
 
     /**

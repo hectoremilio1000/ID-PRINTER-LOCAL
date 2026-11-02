@@ -205,6 +205,18 @@ final class EstiloTicket
         $printer->setEmphasis((bool) $p['negrita']);
     }
 
+    /** Puntos que avanza el papel en lugar de una divisoria apagada (a 203 dpi, 8 puntos = 1 mm; 14 ≈ 1,75 mm): un renglón de texto mide 24. */
+    public const ESPACIO_SIN_DIVISORIA = 14;
+
+    /**
+     * Divisoria apagada (`divisores` = false): en vez de un renglón de texto en blanco (que gastaba ~2 renglones de papel por producto)
+     * avanza el papel solo unos puntos (ESC J n). Los renglones quedan pegados pero separados, como producto y nota.
+     */
+    public static function espacioSinDivisoria($printer): void
+    {
+        $printer->getPrintConnector()->write("\x1b\x4a" . chr(self::ESPACIO_SIN_DIVISORIA));
+    }
+
     public const COPIAS_MAX = 3;
 
     /**
