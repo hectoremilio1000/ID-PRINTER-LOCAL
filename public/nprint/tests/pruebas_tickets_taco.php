@@ -73,7 +73,10 @@ foreach ([['comanda', 'comanda_restaurante'], ['cancelacion', 'cancelacion'], ['
     $ok(preg_match($linea, $base) === 1, "base de $caso tiene líneas divisorias");
     $s = $txt($con($caso, ['divisores' => false]));
     $ok(preg_match($linea, $s) !== 1, "$caso: divisores=false no deja ninguna línea de - ni de =");
-    $ok(substr_count($s, "\n") >= substr_count($base, "\n") - 2 && str_contains($s, "\n\n"), "$caso: cada línea se cambió por un renglón en blanco (el ticket conserva su largo)");
+    /* Antes cada línea se cambiaba por un renglón en blanco (se gastaba papel); ahora es un avance chico (ESC J n) y el ticket sale MÁS CORTO */
+    $crudo = $con($caso, ['divisores' => false]);
+    $ok(str_contains($crudo, "\x1b\x4a" . chr(EstiloTicket::ESPACIO_SIN_DIVISORIA)), "$caso: divisores=false avanza el papel un espacio chico en lugar de la línea");
+    $ok(substr_count($s, "\n") < substr_count($base, "\n"), "$caso: divisores=false deja el ticket más corto que con líneas (no renglones en blanco)");
     $ok($txt($con($caso, ['divisores' => true])) === $base, "$caso: divisores=true = como hoy");
 }
 
