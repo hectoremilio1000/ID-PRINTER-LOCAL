@@ -18,6 +18,7 @@ final class CatalogoTicket
             'modificadores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'modificadores_en_linea' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
             'comensales' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'agrupar_productos' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
             'divisores' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
         ],
         'cancelacion' => [

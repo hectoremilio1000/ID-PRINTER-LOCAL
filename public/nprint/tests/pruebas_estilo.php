@@ -106,6 +106,8 @@ foreach ($matriz as [$doc, $caso, $marcas, $obl]) {
 require __DIR__ . '/pruebas_tickets_taco.php';
 // Línea «TOTAL DESCUENTOS» (campo total_descuentos)
 require __DIR__ . '/pruebas_total_descuentos.php';
+// «Juntar productos idénticos» de la comanda (campo comanda.agrupar_productos)
+require __DIR__ . '/pruebas_agrupar_comanda.php';
 
 // el catálogo completo de los 11 tipos tiene prueba (salvo los de comanda/antro, que se cubren abajo)
 $pendientes = [];

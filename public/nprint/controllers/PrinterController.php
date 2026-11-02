@@ -659,6 +659,11 @@ class PrinterController
                     return ($asiento($a) ?? PHP_INT_MAX) <=> ($asiento($b) ?? PHP_INT_MAX);
                 });
             }
+            /* `agrupar_productos` (def false: solo si el estilo de la COMANDA lo enciende): los renglones IDÉNTICOS (mismo producto, nota,
+             * tiempo y comensal, y sin modificadores) se juntan en uno con la cantidad sumada: 3 + 2 = 5. Lo que difiera en algo sale aparte. */
+            if (!$esCancelacion && \App\Support\EstiloTicket::campo($est, 'comanda', 'agrupar_productos') === true) {
+                $mainItems = $this->juntarProductosIdenticos($mainItems, $modifiersByCompositeId);
+            }
             $asientoActual = false;
 
             foreach ($mainItems as $item) {
@@ -745,6 +750,47 @@ class PrinterController
         if (\App\Support\EstiloTicket::esPrueba($data)) {
             \App\Support\EstiloTicket::imprimirPrueba($printer, $est);
         }
+    }
+
+    /**
+     * «Juntar productos idénticos» de la comanda. Une los renglones que son iguales en TODO lo que cocina lee: nombre, nota, tiempo
+     * (`course`), comensal (`seatNo`) y mitad (`half`). Suma `qty`; el orden es el de la primera aparición. Nunca junta:
+     *  - un producto con modificadores (cada uno lleva los suyos y sumarlos dejaría dudas de a cuál pertenecen);
+     *  - un renglón cuya cantidad no sea un número (se imprime tal cual llegó).
+     * @param array<int,array> $items renglones principales (sin modificadores sueltos)
+     * @param array<string,array> $modsPorCompuesto modificadores por `compositeProductId`
+     * @return array<int,array>
+     */
+    private function juntarProductosIdenticos(array $items, array $modsPorCompuesto): array
+    {
+        $norm = static fn ($v): string => mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', (string) $v)));
+        $salida = [];
+        $posicion = [];
+        foreach ($items as $it) {
+            $compuesto = $it['compositeProductId'] ?? '';
+            $conMods = !empty($it['isCompositeProductMain']) && $compuesto !== '' && !empty($modsPorCompuesto[$compuesto]);
+            $qty = $it['qty'] ?? null;
+            if ($conMods || !is_numeric($qty) || $norm($it['name'] ?? '') === '') {
+                $salida[] = $it;
+                continue;
+            }
+            $clave = implode('|', [
+                $norm($it['name'] ?? ''),
+                $norm($it['notes'] ?? ''),
+                (string) ($it['course'] ?? ''),
+                (string) ($it['seatNo'] ?? ''),
+                (string) ($it['half'] ?? ''),
+            ]);
+            if (!isset($posicion[$clave])) {
+                $posicion[$clave] = count($salida);
+                $salida[] = $it;
+                continue;
+            }
+            $i = $posicion[$clave];
+            $suma = (float) $salida[$i]['qty'] + (float) $qty;
+            $salida[$i]['qty'] = floor($suma) === $suma ? (int) $suma : $suma;
+        }
+        return $salida;
     }
 
     /**
