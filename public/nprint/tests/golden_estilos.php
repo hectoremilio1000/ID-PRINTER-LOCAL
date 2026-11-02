@@ -71,6 +71,7 @@ foreach ($casos as $nombre => $c) {
 }
 
 require __DIR__ . '/pruebas_estilo.php';
+require __DIR__ . '/pruebas_copias.php';
 
 echo $fallas === 0 ? "\nTODO OK\n" : "\n$fallas FALLAS\n";
 exit($fallas === 0 ? 0 : 1);

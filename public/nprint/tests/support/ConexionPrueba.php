@@ -23,6 +23,16 @@ final class ConexionPrueba implements PrintConnector
         $this->buffer[] = $data;
     }
 
+    /** Igual que TrackedWindowsPrintConnector::repetirContenido: el contenido ya armado se repite `$veces` veces en el mismo trabajo. */
+    public function repetirContenido(int $veces): void
+    {
+        if (!is_array($this->buffer) || !$this->buffer || $veces < 2) return;
+        $una = $this->buffer;
+        for ($i = 1; $i < $veces; $i++) {
+            foreach ($una as $trozo) $this->buffer[] = $trozo;
+        }
+    }
+
     public function read($len)
     {
         return '';

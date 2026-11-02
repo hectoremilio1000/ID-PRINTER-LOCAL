@@ -80,6 +80,22 @@ class TrackedWindowsPrintConnector extends WindowsPrintConnector
         }, $this, WindowsPrintConnector::class)();
     }
 
+    /**
+     * Copias del ticket: deja el contenido ya armado (ticket completo, con su corte) repetido `$veces` veces seguidas en el MISMO trabajo.
+     * Duplica los bytes tal cual (no vuelve a armar nada), así que cada copia es idéntica a la primera. Un solo trabajo = un solo jobUid.
+     */
+    public function repetirContenido(int $veces): void
+    {
+        if ($this->cerrado || $veces < 2) return;
+        \Closure::bind(function () use ($veces) {
+            if (!is_array($this->buffer) || !$this->buffer) return;
+            $una = $this->buffer;
+            for ($i = 1; $i < $veces; $i++) {
+                foreach ($una as $trozo) $this->buffer[] = $trozo;
+            }
+        }, $this, WindowsPrintConnector::class)();
+    }
+
     public function finalize()
     {
         if ($this->cerrado) return;
