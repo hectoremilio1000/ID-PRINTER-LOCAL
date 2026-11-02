@@ -307,6 +307,19 @@ class PrinterController
     }
 
     /**
+     * Copias del ticket (`data.style.copias`, 1 a 3, solo estilo v2): repite DENTRO de la misma petición lo que ya quedó armado en el conector
+     * (ticket completo con su corte), así sale N veces seguidas en un solo trabajo, con un solo jobUid y una sola entrada en la bitácora.
+     * Se llama después del último corte y antes de cerrar; si el ticket falló a medias nunca se llega aquí. Sin estilo o con 1 no hace nada.
+     */
+    private function repetirCopias($connector, $data): void
+    {
+        $n = \App\Support\EstiloTicket::copias($data);
+        if ($n > 1 && is_object($connector) && method_exists($connector, 'repetirContenido')) {
+            $connector->repetirContenido($n);
+        }
+    }
+
+    /**
      * Avisa a la bitácora (PrintJobLog) que este trabajo NO se imprimió.
      *
      * Sin esto, un error que no sea el típico "impresora apagada" (por
@@ -786,6 +799,7 @@ class PrinterController
 
                     $printer->feed(3);
                     $printer->cut();
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -877,6 +891,7 @@ class PrinterController
 
                     $printer->feed(3);
                     $printer->cut();
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -1208,6 +1223,7 @@ class PrinterController
                         }
                     }
 
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -1320,6 +1336,7 @@ class PrinterController
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
                     $this->renderComisionesBody($printer, $data, $grupos, $orden);
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -1689,6 +1706,7 @@ class PrinterController
 
                     $printer->feed(3);
                     $printer->cut();
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -1792,6 +1810,7 @@ class PrinterController
 
                     $printer->feed(3);
                     $printer->cut();
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -2244,6 +2263,7 @@ class PrinterController
 
                     $printer->feed(3);
                     $printer->cut();
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -3037,6 +3057,7 @@ class PrinterController
 
                     $printer->feed(3);
                     $printer->cut();
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -3127,6 +3148,7 @@ class PrinterController
 
                     $printer->feed(3);
                     $printer->cut();
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 
@@ -3216,6 +3238,7 @@ class PrinterController
 
                     $printer->feed(3);
                     $printer->cut();
+                    $this->repetirCopias($connector, $data);
                     $printer->close();
                     $printerClosed = true;
 

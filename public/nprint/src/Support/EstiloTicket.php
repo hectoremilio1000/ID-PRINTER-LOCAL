@@ -205,6 +205,23 @@ final class EstiloTicket
         $printer->setEmphasis((bool) $p['negrita']);
     }
 
+    public const COPIAS_MAX = 3;
+
+    /**
+     * Veces que se imprime el ticket en la misma petición: `style.copias` entero de 1 a 3 y SOLO con estilo v2.
+     * Cualquier otra cosa (sin estilo, v1, 0, 4, decimal, texto) = 1: el papel sale como hoy. No pasa por normalizar(): copias no
+     * activa por sí sola el camino con estilo, así que el ticket sin cambios de estilo conserva sus bytes.
+     */
+    public static function copias($data): int
+    {
+        if (!is_array($data)) return 1;
+        $style = $data['style'] ?? null;
+        if (!is_array($style) || ($style['v'] ?? null) !== 2) return 1;
+        $n = $style['copias'] ?? null;
+        if (!is_int($n) || $n < 1 || $n > self::COPIAS_MAX) return 1;
+        return $n;
+    }
+
     /** Caracteres por renglón a ese ancho de letra: base / multiplicador (mínimo 1). */
     public static function columnasEfectivas(int $base, int $ancho): int
     {
