@@ -2830,6 +2830,8 @@ class PrinterController
          * nada. "TOTAL CONSUMO" y "PROPINA" solo salen cuando hubo propina: sin ella, TOTAL CONSUMO
          * sería el mismo número que el TOTAL grande de abajo. */
         if ($pd !== null) \App\Support\EstiloTicket::fijar($printer, $pd);
+        /* `total_descuentos` (def false): descuentos de productos + de la orden, tal como llegan en totales.descuentos (no se recalcula). */
+        if ($V('total_descuentos') && (float)($tot['descuentos'] ?? 0) > 0) $this->printTwoColumnLine($printer, 'TOTAL DESCUENTOS', '-' . $this->formatMoney((float)$tot['descuentos']), $wDet);
         if ($V('subtotal')) $this->printTwoColumnLine($printer, 'SUBTOTAL', $this->formatMoney($tot['subtotal'] ?? 0), $wDet);
         if ($V('iva')) $this->printTwoColumnLine($printer, 'IVA', $this->formatMoney($tot['iva'] ?? 0), $wDet);
         if ($propina > 0) {
@@ -4257,6 +4259,9 @@ class PrinterController
             if ($pd !== null) \App\Support\EstiloTicket::fijar($printer, $pd);
         }
 
+        if ($V('total_descuentos') && (float)($tot['descuentos'] ?? 0) > 0) {
+            $this->printTwoColumnLine($printer, 'TOTAL DESCUENTOS', '-' . $this->formatMoney((float)$tot['descuentos']), $wDet);
+        }
         $verSub = $V('subtotal');
         $verIva = $V('iva');
         if ($verSub && $verIva) {
