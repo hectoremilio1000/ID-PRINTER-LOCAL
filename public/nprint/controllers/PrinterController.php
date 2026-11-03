@@ -763,7 +763,10 @@ class PrinterController
      */
     private function juntarProductosIdenticos(array $items, array $modsPorCompuesto): array
     {
-        $norm = static fn ($v): string => mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', (string) $v)));
+        /* El PHP portable de los restaurantes puede NO traer mbstring (ahí `mb_strtolower` es «undefined function» y la comanda sale RECHAZADA):
+         * con mbstring se baja a minúsculas con acentos; sin él, solo las ASCII (basta para comparar dos renglones del mismo producto). */
+        $minusculas = function_exists('mb_strtolower') ? 'mb_strtolower' : 'strtolower';
+        $norm = static fn ($v): string => $minusculas(trim((string) preg_replace('/\s+/u', ' ', (string) $v)));
         $salida = [];
         $posicion = [];
         foreach ($items as $it) {
