@@ -36,10 +36,12 @@ use Mike42\Escpos\Printer;
  *     detalle     1x2 normal  izq     ← producto, Tiempo, Nota y Modificadores (restaurante)
  *                 2x2 normal  izq     ← producto + modificadores en párrafo (antro, tipo 2)
  *     pie         1x1 negrita centro  ← solo la línea «PRUEBA - NO VALIDO» (la comanda no tiene pie hoy)
+ *     comensal    (opcional) título «COMENSAL N» / «MESA». Sin esta parte se imprime como siempre: tamaño del
+ *                 encabezado y en negrita. Cada campo que falte sale también de ahí.
  */
 final class EstiloTicket
 {
-    public const PARTES = ['titulo', 'encabezado', 'detalle', 'totales', 'pie'];
+    public const PARTES = ['titulo', 'encabezado', 'detalle', 'comensal', 'totales', 'pie'];
     private const COLUMNAS = [32, 42, 48];
     private const ALINEACIONES = ['izq' => Printer::JUSTIFY_LEFT, 'centro' => Printer::JUSTIFY_CENTER, 'der' => Printer::JUSTIFY_RIGHT];
 
