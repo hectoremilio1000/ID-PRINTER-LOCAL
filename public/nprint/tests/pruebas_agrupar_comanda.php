@@ -50,15 +50,45 @@ foreach ($distintos as $motivo => $its) {
 $s = $salida($comanda([$taco + ['qty' => 1, 'notes' => 'Sin  cebolla'], ['name' => ' TACO ', 'course' => 1, 'qty' => 2, 'notes' => 'sin cebolla']]), $activo);
 $ok($tiene($s, '3 Taco') && substr_count($s, 'sin cebolla') + substr_count($s, 'Sin  cebolla') === 1, 'agrupar_productos: misma nota (sin importar mayúsculas ni espacios) se junta y se imprime una vez');
 
-// producto con modificadores: nunca se junta
-$conMods = [
-    ['qty' => 1, 'name' => 'Hamburguesa', 'course' => 1, 'isCompositeProductMain' => true, 'compositeProductId' => 'A'],
-    ['isModifier' => true, 'compositeProductId' => 'A', 'name' => 'Queso', 'qty' => 1],
-    ['qty' => 1, 'name' => 'Hamburguesa', 'course' => 1, 'isCompositeProductMain' => true, 'compositeProductId' => 'B'],
-    ['isModifier' => true, 'compositeProductId' => 'B', 'name' => 'Queso', 'qty' => 1],
-];
-$s = $salida($comanda($conMods), $activo);
-$ok(substr_count($s, 'Hamburguesa') === 2 && !$tiene($s, '2 Hamburguesa') && substr_count($s, 'Queso') === 2, 'agrupar_productos: producto con modificadores nunca se junta (cada uno con los suyos)');
+// producto con modificadores: se junta solo si lleva EXACTAMENTE los mismos (y en la misma cantidad por pieza)
+$mod = fn (string $id, string $nombre, $qty = 1, array $extra = []): array => ['isModifier' => true, 'compositeProductId' => $id, 'name' => $nombre, 'qty' => $qty] + $extra;
+$principal = fn (string $id, $qty = 1, string $nombre = 'Taco carnitas', array $extra = []): array => ['qty' => $qty, 'name' => $nombre, 'course' => 1, 'isCompositeProductMain' => true, 'compositeProductId' => $id] + $extra;
+
+$s = $salida($comanda([$principal('A'), $mod('A', 'Mod1'), $mod('A', 'Mod2'), $principal('B'), $mod('B', 'Mod1'), $mod('B', 'Mod2')]), $activo);
+$ok($tiene($s, '2 Taco carnitas') && substr_count($s, 'Taco carnitas') === 1 && $tiene($s, '1 x Mod1') && $tiene($s, '1 x Mod2') && substr_count($s, 'Mod1') === 1, 'agrupar_productos: mismos modificadores y cantidad = suma el producto, los modificadores siguen por pieza');
+
+$s = $salida($comanda([$principal('A'), $mod('A', 'Mod1'), $mod('A', 'Mod2'), $principal('B'), $mod('B', 'Mod2'), $mod('B', 'Mod1')]), $activo);
+$ok($tiene($s, '2 Taco carnitas'), 'agrupar_productos: el orden en que se eligieron los modificadores no importa');
+
+$s = $salida($comanda([$principal('A'), $mod('A', 'Mod1'), $principal('B'), $mod('B', 'Mod2')]), $activo);
+$ok(substr_count($s, 'Taco carnitas') === 2 && !$tiene($s, '2 Taco carnitas'), 'agrupar_productos: modificadores distintos salen aparte');
+
+$s = $salida($comanda([$principal('A'), $mod('A', 'Mod1'), $principal('B'), $mod('B', 'Mod1', 2)]), $activo);
+$ok(substr_count($s, 'Taco carnitas') === 2 && $tiene($s, '1 x Mod1') && $tiene($s, '2 x Mod1'), 'agrupar_productos: misma opción en otra cantidad sale aparte');
+
+$s = $salida($comanda([$principal('A'), $mod('A', 'Mod1'), $principal('B')]), $activo);
+$ok(substr_count($s, 'Taco carnitas') === 2, 'agrupar_productos: con modificador y sin modificador salen aparte');
+
+$s = $salida($comanda([$principal('A'), $mod('A', 'Mod1', 1, ['half' => 2]), $principal('B'), $mod('B', 'Mod1', 1, ['half' => 3])]), $activo);
+$ok(substr_count($s, 'Taco carnitas') === 2, 'agrupar_productos: la misma opción en otra mitad sale aparte');
+
+$s = $salida($comanda([$principal('A'), $mod('A', 'Mod1', 1, ['notes' => 'poco']), $principal('B'), $mod('B', 'Mod1', 1, ['notes' => 'mucho'])]), $activo);
+$ok(substr_count($s, 'Taco carnitas') === 2, 'agrupar_productos: el mismo modificador con otra nota sale aparte');
+
+$s = $salida($comanda([$principal('A', 2), $mod('A', 'Mod1', 2), $principal('B', 1), $mod('B', 'Mod1', 1)]), $activo);
+$ok($tiene($s, '3 Taco carnitas') && $tiene($s, '1 x Mod1') && substr_count($s, 'Mod1') === 1, 'agrupar_productos: la comparación es por pieza (2 con 2 = 1 con 1)');
+
+$sola = $comanda([$principal('A', 2), $mod('A', 'Mod1', 2)]);
+$ok($tiene($salida($sola, $activo), '2 x Mod1') && $salida($sola, $activo) === $salida($sola, V2()), 'agrupar_productos: un renglón que no se junta con nadie sale igual que hoy');
+
+// apagado: dos renglones con claves distintas no cambian
+$dos = $comanda([$principal('A'), $mod('A', 'Mod1'), $principal('B'), $mod('B', 'Mod1')]);
+$ok(substr_count($salida($dos, V2()), 'Taco carnitas') === 2, 'agrupar_productos apagado: productos con modificadores salen separados');
+
+// modificadores «sueltos» (Caja, restaurante normal): renglones con sangría, sin clave. El producto no puede juntarse sin perder de quién son
+$suelto = fn (string $nombre): array => ['qty' => 1, 'name' => '  ' . $nombre, 'course' => 1, 'half' => 1];
+$s = $salida($comanda([['qty' => 1, 'name' => 'Taco', 'course' => 1], $suelto('Mod1'), ['qty' => 1, 'name' => 'Taco', 'course' => 1], $suelto('Mod2')]), $activo);
+$ok(substr_count($s, 'Taco') === 2 && !$tiene($s, '2 Taco') && strpos($s, 'Mod1') < strpos($s, 'Mod2'), 'agrupar_productos: modificadores sueltos no se juntan ni se separan de su producto');
 
 // cantidad no numérica o fraccionaria
 $s = $salida($comanda([['qty' => 'x', 'name' => 'Raro', 'course' => 1], ['qty' => 'x', 'name' => 'Raro', 'course' => 1]]), $activo);

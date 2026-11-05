@@ -665,7 +665,7 @@ class PrinterController
                 });
             }
             /* `agrupar_productos` (def false: solo si el estilo de la COMANDA lo enciende): los renglones IDÉNTICOS (mismo producto, nota,
-             * tiempo y comensal, y sin modificadores) se juntan en uno con la cantidad sumada: 3 + 2 = 5. Lo que difiera en algo sale aparte. */
+             * tiempo, comensal y modificadores) se juntan en uno con la cantidad sumada: 3 + 2 = 5. Lo que difiera en algo sale aparte. */
             if (!$esCancelacion && \App\Support\EstiloTicket::campo($est, 'comanda', 'agrupar_productos') === true) {
                 $mainItems = $this->juntarProductosIdenticos($mainItems, $modifiersByCompositeId);
             }
@@ -708,7 +708,7 @@ class PrinterController
                 }
                 /* Modificadores repetidos → una línea con cantidad ("4 x A. MINERAL"). Siempre se
                  * escribe la cantidad, también cuando es 1. */
-                $modsAgrupados = $V('modificadores') ? $this->agruparModificadores($modifiers) : [];
+                $modsAgrupados = $V('modificadores') ? ($item['modsPorPieza'] ?? $this->agruparModificadores($modifiers)) : [];
 
                 if ($esAntro) {
                     /* "1-Nombre, ** 4 x MOD **, ** 1 x MOD **". Antro: letra MÁS GRANDE en los pedidos y
@@ -765,10 +765,17 @@ class PrinterController
 
     /**
      * «Juntar productos idénticos» de la comanda. Une los renglones que son iguales en TODO lo que cocina lee: nombre, nota, tiempo
-     * (`course`), comensal (`seatNo`) y mitad (`half`). Suma `qty`; el orden es el de la primera aparición. Nunca junta:
-     *  - un producto con modificadores (cada uno lleva los suyos y sumarlos dejaría dudas de a cuál pertenecen);
-     *  - un renglón cuya cantidad no sea un número (se imprime tal cual llegó).
-     * @param array<int,array> $items renglones principales (sin modificadores sueltos)
+     * (`course`), comensal (`seatNo`), mitad (`half`) y modificadores. Suma `qty`; el orden es el de la primera aparición.
+     *
+     * Los modificadores se comparan por pieza y sin importar el orden: la `qty` de un modificador ya viene multiplicada por la de su
+     * producto (2 tacos con 1 de queso cada uno mandan queso = 2). Al juntar, el producto suma y sus modificadores se imprimen por pieza:
+     * «2 Taco / 1 x Queso / 1 x Salsa». Un renglón que no se junta con nadie no se toca: sale igual que sin esta opción.
+     *
+     * Nunca junta:
+     *  - un renglón cuya cantidad no sea un número positivo (se imprime tal cual llegó);
+     *  - un producto con modificadores «sueltos» (Caja los manda como renglones con dos espacios de sangría, sin clave que los ligue): juntarlo dejaría
+     *    los modificadores sin saber de cuál son.
+     * @param array<int,array> $items renglones principales (sin modificadores ligados)
      * @param array<string,array> $modsPorCompuesto modificadores por `compositeProductId`
      * @return array<int,array>
      */
@@ -778,22 +785,39 @@ class PrinterController
          * con mbstring se baja a minúsculas con acentos; sin él, solo las ASCII (basta para comparar dos renglones del mismo producto). */
         $minusculas = function_exists('mb_strtolower') ? 'mb_strtolower' : 'strtolower';
         $norm = static fn ($v): string => $minusculas(trim((string) preg_replace('/\s+/u', ' ', (string) $v)));
+        $esSuelto = static fn (array $it): bool => strncmp((string) ($it['name'] ?? ''), '  ', 2) === 0;
+        $items = array_values($items);
         $salida = [];
         $posicion = [];
-        foreach ($items as $it) {
-            $compuesto = $it['compositeProductId'] ?? '';
-            $conMods = !empty($it['isCompositeProductMain']) && $compuesto !== '' && !empty($modsPorCompuesto[$compuesto]);
+        foreach ($items as $k => $it) {
             $qty = $it['qty'] ?? null;
-            if ($conMods || !is_numeric($qty) || $norm($it['name'] ?? '') === '') {
+            if (
+                !is_numeric($qty) || (float) $qty <= 0 || $norm($it['name'] ?? '') === ''
+                || $esSuelto($it) || (isset($items[$k + 1]) && $esSuelto($items[$k + 1]))
+            ) {
                 $salida[] = $it;
                 continue;
             }
+            $compuesto = $it['compositeProductId'] ?? '';
+            $mods = !empty($it['isCompositeProductMain']) && $compuesto !== '' ? ($modsPorCompuesto[$compuesto] ?? []) : [];
+            /* Por pieza: las mitades no llevan cantidad (agruparModificadores las deja en 1), el resto se divide entre la del producto. */
+            $porPieza = [];
+            $firma = [];
+            foreach ($this->agruparModificadores($mods) as $m) {
+                if ($m['half'] === 1) {
+                    $m['qty'] = round($m['qty'] / (float) $qty, 4);
+                }
+                $porPieza[] = $m;
+                $firma[] = implode('~', [$norm($m['name']), $m['half'], $norm($m['notes']), $m['qty']]);
+            }
+            sort($firma);
             $clave = implode('|', [
                 $norm($it['name'] ?? ''),
                 $norm($it['notes'] ?? ''),
                 (string) ($it['course'] ?? ''),
                 (string) ($it['seatNo'] ?? ''),
                 (string) ($it['half'] ?? ''),
+                implode(';', $firma),
             ]);
             if (!isset($posicion[$clave])) {
                 $posicion[$clave] = count($salida);
@@ -803,6 +827,7 @@ class PrinterController
             $i = $posicion[$clave];
             $suma = (float) $salida[$i]['qty'] + (float) $qty;
             $salida[$i]['qty'] = floor($suma) === $suma ? (int) $suma : $suma;
+            $salida[$i]['modsPorPieza'] = $porPieza;
         }
         return $salida;
     }
