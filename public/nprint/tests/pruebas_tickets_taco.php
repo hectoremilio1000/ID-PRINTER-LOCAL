@@ -134,6 +134,18 @@ $agrupada = $txt(correr($ctrl, $caso($itemsComanda), V2([], ['comensales' => tru
 $pos = fn (string $m) => strpos($agrupada, $m);
 $ok($pos('COMENSAL 1') !== false && $pos('COMENSAL 2') !== false && $pos('MESA') !== false, 'comanda: salen los encabezados COMENSAL 1, COMENSAL 2 y MESA');
 $ok($pos('COMENSAL 1') < $pos('Papas') && $pos('Papas') < $pos('COMENSAL 2') && $pos('COMENSAL 2') < $pos('Hamburguesa') && $pos('Hamburguesa') < $pos('MESA') && $pos('MESA') < $pos('Ensalada'), 'comanda: cada producto queda bajo su comensal y lo compartido al final');
+
+// Título «COMENSAL N» con estilo propio. Sin la parte: exactamente el ticket de antes.
+$antesDe = fn (string $b, string $t): string => substr($b, 0, (int) strpos($b, $t));
+$sinParte = correr($ctrl, $caso($itemsComanda), V2([], ['comensales' => true]));
+$conParte = correr($ctrl, $caso($itemsComanda), V2(['comensal' => ['ancho' => 2, 'alto' => 2, 'negrita' => true, 'alineacion' => 'centro']], ['comensales' => true]));
+$ok($txt($conParte) === $txt($sinParte), 'comensal: la parte solo cambia el formato, no el texto');
+$ok($conParte !== $sinParte, 'comensal: la parte sí cambia el formato en papel');
+$ok(substr($antesDe($conParte, 'COMENSAL 1'), -9) !== '' && str_contains(substr($antesDe($conParte, 'COMENSAL 1'), -12), "\x1d!\x11"), 'comensal: el título sale al tamaño elegido (2x2)');
+$ok(str_contains($antesDe($conParte, 'Papas'), "\x1d!\x01"), 'comensal: el producto vuelve al tamaño del detalle (1x2)');
+$soloNegritaApagada = correr($ctrl, $caso($itemsComanda), V2(['comensal' => ['negrita' => false]], ['comensales' => true]));
+$ok($soloNegritaApagada !== $sinParte, 'comensal: se puede quitar la negrita del título');
+$ok(correr($ctrl, $caso($itemsComanda), V2(['comensal' => ['ancho' => 2]], ['comensales' => false])) === correr($ctrl, $caso($itemsComanda), V2([], ['comensales' => false])), 'comensal: con «comensales» apagado la parte no hace nada');
 $ok($pos('Queso extra') > $pos('Hamburguesa') && $pos('Queso extra') < $pos('MESA'), 'comanda: el modificador se queda con su platillo');
 $ok(substr_count($agrupada, 'COMENSAL 2') === 1, 'comanda: un comensal con varios productos lleva un solo encabezado');
 // la cancelación no se agrupa aunque traiga seatNo

@@ -535,6 +535,7 @@ class PrinterController
         $wSep = $est['columnas'] ?? 48;
         $pd = null;
         $pe = null;
+        $pc = null;
         $negE = false;
 
         $this->iniciarTicket($printer);
@@ -556,6 +557,10 @@ class PrinterController
             $pd = \App\Support\EstiloTicket::parte($est, 'detalle', $esAntro
                 ? ['ancho' => 2, 'alto' => 2, 'negrita' => false, 'alineacion' => 'izq']
                 : ['ancho' => 1, 'alto' => 2, 'negrita' => false, 'alineacion' => 'izq']);
+            /* Título «COMENSAL N» con estilo propio solo si el restaurante lo guardó. Sin él, null: se imprime como siempre. */
+            if (isset($est['partes']['comensal'])) {
+                $pc = \App\Support\EstiloTicket::parte($est, 'comensal', array_merge($pe, ['negrita' => true]));
+            }
         }
         /* Raya de 48 (o de `columnas`): con estilo siempre a tamaño normal para no desbordar el papel */
         $raya = function () use ($printer, $est, $wSep, $pe, $V) {
@@ -669,9 +674,15 @@ class PrinterController
             foreach ($mainItems as $item) {
                 if ($porComensal && $asiento($item) !== $asientoActual) {
                     $asientoActual = $asiento($item);
-                    $printer->setEmphasis(true);
+                    if ($pc !== null) {
+                        \App\Support\EstiloTicket::fijar($printer, $pc);
+                    } else {
+                        $printer->setEmphasis(true);
+                    }
                     $printer->text($asientoActual === null ? "MESA\n" : "COMENSAL " . $asientoActual . "\n");
-                    $printer->setEmphasis($negE);
+                    if ($pc === null) {
+                        $printer->setEmphasis($negE);
+                    }
                 }
                 $raya();
                 if ($pd !== null) \App\Support\EstiloTicket::fijar($printer, $pd);
