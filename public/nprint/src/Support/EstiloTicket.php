@@ -140,7 +140,9 @@ final class EstiloTicket
         while ($renglones && $renglones[0] === '') array_shift($renglones);
         if (!$renglones || count($renglones) > self::TEXTO_MAX_RENGLONES) return null;
         $limpio = implode("\n", $renglones);
-        if (mb_strlen($limpio, 'UTF-8') > self::TEXTO_MAX_CARACTERES) return null;
+        /* Sin `mbstring` en algunas PCs (PHP portátil): contar caracteres con PCRE, que siempre está. */
+        $largo = function_exists('mb_strlen') ? mb_strlen($limpio, 'UTF-8') : preg_match_all('/./us', $limpio);
+        if ($largo === false || $largo > self::TEXTO_MAX_CARACTERES) return null;
         return $limpio;
     }
 
