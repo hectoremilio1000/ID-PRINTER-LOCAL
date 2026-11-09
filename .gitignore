@@ -14,6 +14,9 @@ logs/
 # Archivo de entorno con URLs cloud: copiar desde .env.example
 public/nprint/.env
 
+# Llave compartida con el Edge para autorizar con huella
+/secrets/
+
 # Basura de macOS
 .DS_Store
 # Bitácora local de impresiones (rastreo del POS) — cambia en cada ticket

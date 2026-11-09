@@ -8,7 +8,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 class FingerprintController
 {
     // Ajusta estas rutas a tu instalación
-    private string $exePath = __DIR__ . '../../bin/finger/FingerPrint.exe';
+    private string $exePath = __DIR__ . '/../bin/finger/FingerPrint.exe';
 
     // ✅ Cloud API (Adonis)
     private string $cloudBaseUrl;
@@ -454,6 +454,132 @@ class FingerprintController
         }
     }
 
+
+    /**
+     * Llave que comparte este ID-Printer con el Edge. Vive FUERA de public/ porque `php -S` sirve como
+     * archivo cualquier cosa que este dentro de la carpeta publica (incluido un .env).
+     */
+    private function fingerprintEdgeKey(): string
+    {
+        $fromEnv = getenv('FINGERPRINT_EDGE_KEY');
+        if ($fromEnv !== false && trim($fromEnv) !== '') {
+            return trim($fromEnv);
+        }
+
+        $path = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'secrets' . DIRECTORY_SEPARATOR . 'fingerprint-edge.key';
+        if (!is_file($path) || !is_readable($path)) {
+            return '';
+        }
+
+        return trim((string)@file_get_contents($path));
+    }
+
+    private function firstReaderSerial(): string
+    {
+        $r = $this->runExeLines(['list-readers']);
+        if (!$r['ok']) return '';
+
+        foreach ($r['lines'] as $line) {
+            $j = json_decode(trim($line), true);
+            if (is_array($j) && isset($j['serial']) && (string)$j['serial'] !== '') {
+                return (string)$j['serial'];
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * POST /fingerprint/authorize (solo lo llama el Edge).
+     * header: X-Fingerprint-Key
+     * body:   { "challenge": "uuid", "readerSerial"?: "SERIAL", "candidates": [{ "userId": 12, "templates": ["..."] }] }
+     *
+     * Las plantillas llegan en cada peticion, viven solo en un archivo temporal y este cuerpo nunca se
+     * registra en logs. La firma ata el resultado al reto, para que el Edge no acepte una respuesta vieja.
+     */
+    public function authorize(Request $request, Response $response): Response
+    {
+        $key = $this->fingerprintEdgeKey();
+        if (strlen($key) < 32) {
+            return $this->json($response, ['ok' => false, 'error' => 'huella_sin_configurar'], 503);
+        }
+        if (!hash_equals($key, $request->getHeaderLine('X-Fingerprint-Key'))) {
+            return $this->json($response, ['ok' => false, 'error' => 'llave_invalida'], 401);
+        }
+
+        $stream = $request->getBody();
+        if ($stream->isSeekable()) $stream->rewind();
+        $body = json_decode($stream->getContents(), true);
+        if (!is_array($body)) {
+            return $this->json($response, ['ok' => false, 'error' => 'cuerpo_invalido'], 400);
+        }
+
+        $challenge = (string)($body['challenge'] ?? '');
+        if (!preg_match('/^[A-Za-z0-9-]{16,80}$/', $challenge)) {
+            return $this->json($response, ['ok' => false, 'error' => 'reto_invalido'], 400);
+        }
+
+        $candidates = [];
+        $allowedUserIds = [];
+        foreach (($body['candidates'] ?? []) as $c) {
+            $userId = (int)($c['userId'] ?? 0);
+            $templates = is_array($c['templates'] ?? null) ? array_values(array_filter($c['templates'], 'is_string')) : [];
+            if ($userId <= 0 || count($templates) === 0) continue;
+            $candidates[] = ['userId' => $userId, 'templates' => $templates];
+            $allowedUserIds[$userId] = true;
+        }
+        if (count($candidates) === 0 || count($candidates) > 25) {
+            return $this->json($response, ['ok' => false, 'error' => 'candidatos_invalidos'], 400);
+        }
+
+        $reader = (string)($body['readerSerial'] ?? '');
+        if ($reader === '') $reader = $this->firstReaderSerial();
+        if ($reader === '') {
+            return $this->json($response, ['ok' => false, 'error' => 'lector_no_detectado'], 503);
+        }
+
+        $tmp = tempnam(sys_get_temp_dir(), 'fpa_');
+        try {
+            file_put_contents($tmp, json_encode(['candidates' => $candidates], JSON_UNESCAPED_UNICODE));
+            $result = $this->runExe([
+                'identify',
+                '--reader',
+                $reader,
+                '--candidatesFile',
+                $tmp,
+                '--timeoutMs',
+                '60000',
+            ]);
+        } finally {
+            @unlink($tmp);
+        }
+
+        if (($result['ok'] ?? false) !== true) {
+            $raw = (string)($result['raw'] ?? '');
+            $timedOut = ($result['error'] ?? '') === 'timeout'
+                || ($result['error'] ?? '') === 'exe_timeout'
+                || strpos($raw, '"error":"timeout"') !== false;
+
+            return $this->json(
+                $response,
+                ['ok' => false, 'error' => $timedOut ? 'tiempo_agotado' : 'lector_error'],
+                $timedOut ? 408 : 500
+            );
+        }
+
+        $userId = (int)($result['userId'] ?? 0);
+        $matched = ($result['matched'] ?? false) === true && isset($allowedUserIds[$userId]);
+        if (!$matched) $userId = 0;
+
+        return $this->json($response, [
+            'ok' => true,
+            'matched' => $matched,
+            'userId' => $userId,
+            'readerSerial' => $reader,
+            'challenge' => $challenge,
+            'sig' => hash_hmac('sha256', $challenge . '|' . ($matched ? '1' : '0') . '|' . $userId, $key),
+        ]);
+    }
 
     // GET /fingerprint/list-readers
     // GET /fingerprint/list-readers
