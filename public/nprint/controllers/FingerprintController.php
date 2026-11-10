@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Support\BiometricProtocol;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Message\ResponseInterface as Response;
 
@@ -455,25 +456,6 @@ class FingerprintController
     }
 
 
-    /**
-     * Llave que comparte este ID-Printer con el Edge. Vive FUERA de public/ porque `php -S` sirve como
-     * archivo cualquier cosa que este dentro de la carpeta publica (incluido un .env).
-     */
-    private function fingerprintEdgeKey(): string
-    {
-        $fromEnv = getenv('FINGERPRINT_EDGE_KEY');
-        if ($fromEnv !== false && trim($fromEnv) !== '') {
-            return trim($fromEnv);
-        }
-
-        $path = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'secrets' . DIRECTORY_SEPARATOR . 'fingerprint-edge.key';
-        if (!is_file($path) || !is_readable($path)) {
-            return '';
-        }
-
-        return trim((string)@file_get_contents($path));
-    }
-
     private function firstReaderSerial(): string
     {
         $r = $this->runExeLines(['list-readers']);
@@ -490,38 +472,68 @@ class FingerprintController
     }
 
     /**
-     * POST /fingerprint/authorize (solo lo llama el Edge).
-     * header: X-Fingerprint-Key
-     * body:   { "challenge": "uuid", "readerSerial"?: "SERIAL", "candidates": [{ "userId": 12, "templates": ["..."] }] }
-     *
-     * Las plantillas llegan en cada peticion, viven solo en un archivo temporal y este cuerpo nunca se
-     * registra en logs. La firma ata el resultado al reto, para que el Edge no acepte una respuesta vieja.
+     * GET /fingerprint/v1/identity — llaves PÚBLICAS de este agente, para registrarlo en la nube.
+     * Las secretas se crean aquí la primera vez y nunca salen de esta PC.
      */
-    public function authorize(Request $request, Response $response): Response
+    public function v1Identity(Request $request, Response $response): Response
     {
-        $key = $this->fingerprintEdgeKey();
-        if (strlen($key) < 32) {
-            return $this->json($response, ['ok' => false, 'error' => 'huella_sin_configurar'], 503);
+        if (!BiometricProtocol::available()) {
+            return $this->json($response, ['ok' => false, 'error' => 'sodium_no_disponible'], 503);
         }
-        if (!hash_equals($key, $request->getHeaderLine('X-Fingerprint-Key'))) {
-            return $this->json($response, ['ok' => false, 'error' => 'llave_invalida'], 401);
+        try {
+            $id = (new BiometricProtocol())->identity();
+        } catch (\Throwable $e) {
+            return $this->json($response, ['ok' => false, 'error' => 'llaves_no_disponibles'], 500);
+        }
+        $readers = [];
+        $r = $this->runExeLines(['list-readers']);
+        if ($r['ok']) {
+            foreach ($r['lines'] as $line) {
+                $j = json_decode(trim($line), true);
+                if (is_array($j) && isset($j['serial'])) $readers[] = ['serial' => (string)$j['serial'], 'name' => (string)($j['name'] ?? '')];
+            }
+        }
+        return $this->json($response, ['ok' => true, 'v' => BiometricProtocol::VERSION] + $id + ['readers' => $readers]);
+    }
+
+    /**
+     * POST /fingerprint/v1/authorize — contrato GSBIO1 (lo usan el Edge y, sin Edge, la app como simple transporte).
+     * body: { "v": 1, "challenge": {...}, "sealed": { "epk", "iv", "ct", "tag" } }
+     *
+     * No pide llave compartida: las plantillas solo se pueden descifrar aquí y la respuesta va firmada con la
+     * llave de este agente, ligada al reto. Las plantillas viven solo en un archivo temporal y nunca se registran.
+     */
+    public function v1Authorize(Request $request, Response $response): Response
+    {
+        if (!BiometricProtocol::available()) {
+            return $this->json($response, ['ok' => false, 'error' => 'sodium_no_disponible'], 503);
         }
 
         $stream = $request->getBody();
         if ($stream->isSeekable()) $stream->rewind();
         $body = json_decode($stream->getContents(), true);
-        if (!is_array($body)) {
+        if (!is_array($body) || ($body['v'] ?? null) !== BiometricProtocol::VERSION) {
             return $this->json($response, ['ok' => false, 'error' => 'cuerpo_invalido'], 400);
         }
 
-        $challenge = (string)($body['challenge'] ?? '');
-        if (!preg_match('/^[A-Za-z0-9-]{16,80}$/', $challenge)) {
+        $challenge = BiometricProtocol::normalizeChallenge($body['challenge'] ?? null);
+        if ($challenge === null) {
             return $this->json($response, ['ok' => false, 'error' => 'reto_invalido'], 400);
+        }
+
+        $proto = new BiometricProtocol();
+        try {
+            $payload = $proto->open($challenge, $body['sealed'] ?? null);
+        } catch (\Throwable $e) {
+            return $this->json($response, ['ok' => false, 'error' => 'llaves_no_disponibles'], 500);
+        }
+        if ($payload === null) {
+            return $this->json($response, ['ok' => false, 'error' => 'sobre_invalido'], 400);
         }
 
         $candidates = [];
         $allowedUserIds = [];
-        foreach (($body['candidates'] ?? []) as $c) {
+        foreach (($payload['candidates'] ?? []) as $c) {
             $userId = (int)($c['userId'] ?? 0);
             $templates = is_array($c['templates'] ?? null) ? array_values(array_filter($c['templates'], 'is_string')) : [];
             if ($userId <= 0 || count($templates) === 0) continue;
@@ -532,8 +544,7 @@ class FingerprintController
             return $this->json($response, ['ok' => false, 'error' => 'candidatos_invalidos'], 400);
         }
 
-        $reader = (string)($body['readerSerial'] ?? '');
-        if ($reader === '') $reader = $this->firstReaderSerial();
+        $reader = $this->firstReaderSerial();
         if ($reader === '') {
             return $this->json($response, ['ok' => false, 'error' => 'lector_no_detectado'], 503);
         }
@@ -573,11 +584,8 @@ class FingerprintController
 
         return $this->json($response, [
             'ok' => true,
-            'matched' => $matched,
-            'userId' => $userId,
-            'readerSerial' => $reader,
-            'challenge' => $challenge,
-            'sig' => hash_hmac('sha256', $challenge . '|' . ($matched ? '1' : '0') . '|' . $userId, $key),
+            'result' => $challenge + ['matched' => $matched, 'userId' => $userId],
+            'sig' => $proto->sign($challenge, $matched, $userId),
         ]);
     }
 
