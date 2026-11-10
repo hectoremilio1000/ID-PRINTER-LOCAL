@@ -10,6 +10,8 @@ class FingerprintController
 {
     // Ajusta estas rutas a tu instalación
     private string $exePath = __DIR__ . '/../bin/finger/FingerPrint.exe';
+    // Mismo programa con los textos de la ventana en "autorizacion" (tools/huella/textos_autorizacion.py).
+    private string $exeAuthPath = __DIR__ . '/../bin/finger/FingerPrintAuth.exe';
 
     // ✅ Cloud API (Adonis)
     private string $cloudBaseUrl;
@@ -122,13 +124,17 @@ class FingerprintController
         return $response->withHeader('Content-Type', 'application/json')->withStatus($status);
     }
 
-    private function runExe(array $args, int $timeoutSec = 120): array
+    private function runExe(array $args, int $timeoutSec = 120, ?string $exe = null): array
     {
-        if (!file_exists($this->exePath)) {
-            return ['ok' => false, 'error' => 'finger_exe_not_found', 'exePath' => $this->exePath];
+        $exe = $exe ?? $this->exePath;
+        // php -S corta cada peticion a los 30 s (max_execution_time) y deja el exe abierto sin nadie que lo lea.
+        @set_time_limit($timeoutSec + 30);
+
+        if (!file_exists($exe)) {
+            return ['ok' => false, 'error' => 'finger_exe_not_found', 'exePath' => $exe];
         }
 
-        $cmd = '"' . $this->exePath . '" ' . implode(' ', array_map('escapeshellarg', $args));
+        $cmd = '"' . $exe . '" ' . implode(' ', array_map('escapeshellarg', $args));
         file_put_contents('C:\temp\nprint_cmd.log', $cmd . PHP_EOL, FILE_APPEND);
 
         $descriptorspec = [
@@ -560,10 +566,13 @@ class FingerprintController
                 $tmp,
                 '--timeoutMs',
                 '60000',
-            ]);
+            ], 120, is_file($this->exeAuthPath) ? $this->exeAuthPath : null);
         } finally {
             @unlink($tmp);
         }
+
+        // Sin plantillas: solo lo necesario para diagnosticar.
+        @file_put_contents('C:\temp\nprint_authorize.log', date('c') . ' ' . json_encode(array_intersect_key($result, array_flip(['ok', 'error', 'matched', 'userId', 'exitCode', 'timeoutSec']))) . ' stderr=' . substr((string)($result['stderr'] ?? ''), 0, 300) . PHP_EOL, FILE_APPEND);
 
         if (($result['ok'] ?? false) !== true) {
             $raw = (string)($result['raw'] ?? '');
