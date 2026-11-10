@@ -12,6 +12,9 @@ class FingerprintController
     private string $exePath = __DIR__ . '/../bin/finger/FingerPrint.exe';
     // Mismo programa con los textos de la ventana en "autorizacion" (tools/huella/textos_autorizacion.py).
     private string $exeAuthPath = __DIR__ . '/../bin/finger/FingerPrintAuth.exe';
+    // Lectores ZKTeco (ZK9500): mismas órdenes y salida que FingerPrint.exe (tools/huella/zk/HuellaZK.cs).
+    // Sus lectores se listan como "zk:<serie>" y sus plantillas empiezan con "zk1:".
+    private string $exeZkPath = __DIR__ . '/../bin/finger/HuellaZK.exe';
 
     // ✅ Cloud API (Adonis)
     private string $cloudBaseUrl;
@@ -204,13 +207,14 @@ class FingerprintController
     }
 
 
-    private function runExeLines(array $args): array
+    private function runExeLines(array $args, ?string $exe = null): array
     {
-        if (!file_exists($this->exePath)) {
-            return ['ok' => false, 'error' => 'finger_exe_not_found', 'exePath' => $this->exePath, 'lines' => []];
+        $exe = $exe ?? $this->exePath;
+        if (!file_exists($exe)) {
+            return ['ok' => false, 'error' => 'finger_exe_not_found', 'exePath' => $exe, 'lines' => []];
         }
 
-        $cmd = '"' . $this->exePath . '" ' . implode(' ', array_map('escapeshellarg', $args));
+        $cmd = '"' . $exe . '" ' . implode(' ', array_map('escapeshellarg', $args));
         $output = [];
         $exitCode = 0;
 
@@ -305,6 +309,8 @@ class FingerprintController
             if (!$reader) return $this->json($response, ['ok' => false, 'error' => 'readerSerial_required'], 400);
             file_put_contents('C:\temp\nprint_http.log', "[" . date('c') . "] running exe\n", FILE_APPEND);
 
+            $exeEnroll = $this->exeParaLector($reader);
+            $this->traerAlFrente(pathinfo($exeEnroll, PATHINFO_FILENAME));
             $result = $this->runExe([
                 'enroll',
                 '--reader',
@@ -315,7 +321,7 @@ class FingerprintController
                 '4',
                 '--timeoutMs',
                 '90000'
-            ], 180);
+            ], 180, $exeEnroll);
             file_put_contents('C:\temp\nprint_http.log', "[" . date('c') . "] exe done\n", FILE_APPEND);
 
 
@@ -433,11 +439,22 @@ class FingerprintController
                 ], 404);
             }
 
+            $candidates = $this->plantillasDeLaMarca($candidates, $reader);
+            if (count($candidates) === 0) {
+                return $this->json($response, [
+                    'ok' => false,
+                    'error' => 'no_fingerprints_for_restaurant',
+                    'restaurantId' => $restaurantId
+                ], 404);
+            }
+
             // ✅ Guardamos candidates en archivo temporal para el EXE
             $tmp = tempnam(sys_get_temp_dir(), 'fp_');
             file_put_contents($tmp, json_encode(['candidates' => $candidates], JSON_UNESCAPED_UNICODE));
 
-            // ✅ Ejecutar EXE Identify
+            // ✅ Ejecutar EXE Identify (el de la marca del lector)
+            $exeIdent = $this->exeParaLector($reader);
+            $this->traerAlFrente(pathinfo($exeIdent, PATHINFO_FILENAME));
             $result = $this->runExe([
                 'identify',
                 '--reader',
@@ -446,7 +463,7 @@ class FingerprintController
                 $tmp,
                 '--timeoutMs',
                 '60000'
-            ]);
+            ], 120, $exeIdent);
 
             @unlink($tmp);
 
@@ -464,17 +481,52 @@ class FingerprintController
 
     private function firstReaderSerial(): string
     {
-        $r = $this->runExeLines(['list-readers']);
-        if (!$r['ok']) return '';
+        $l = $this->lectores();
+        return $l[0]['serial'] ?? '';
+    }
 
-        foreach ($r['lines'] as $line) {
-            $j = json_decode(trim($line), true);
-            if (is_array($j) && isset($j['serial']) && (string)$j['serial'] !== '') {
-                return (string)$j['serial'];
+    /** Lectores conectados de las dos marcas: [{serial, name, marca: 'dp'|'zk'}]. DigitalPersona primero. */
+    private function lectores(): array
+    {
+        $out = [];
+        foreach ([['dp', $this->exePath], ['zk', $this->exeZkPath]] as [$marca, $exe]) {
+            if (!is_file($exe)) continue;
+            $r = $this->runExeLines(['list-readers'], $exe);
+            if (!$r['ok']) continue;
+            foreach ($r['lines'] as $line) {
+                $j = json_decode(trim($line), true);
+                if (is_array($j) && isset($j['serial']) && (string)$j['serial'] !== '') {
+                    $out[] = ['serial' => (string)$j['serial'], 'name' => (string)($j['name'] ?? ''), 'marca' => $marca];
+                }
             }
         }
+        return $out;
+    }
 
-        return '';
+    private function esZk(string $serial): bool
+    {
+        return stripos($serial, 'zk:') === 0;
+    }
+
+    /** Programa que lee ese lector. Para autorizar con DigitalPersona, la copia con textos de autorización. */
+    private function exeParaLector(string $serial, bool $autorizar = false): string
+    {
+        if ($this->esZk($serial)) return $this->exeZkPath;
+        return ($autorizar && is_file($this->exeAuthPath)) ? $this->exeAuthPath : $this->exePath;
+    }
+
+    /** Solo las plantillas de la marca del lector: ZKTeco empiezan con "zk1:", DigitalPersona no. */
+    private function plantillasDeLaMarca(array $candidates, string $serial): array
+    {
+        $zk = $this->esZk($serial);
+        $out = [];
+        foreach ($candidates as $c) {
+            $tpls = array_values(array_filter((array)($c['templates'] ?? []), function ($t) use ($zk) {
+                return is_string($t) && $t !== '' && ((stripos($t, 'zk1:') === 0) === $zk);
+            }));
+            if (count($tpls) > 0) $out[] = ['userId' => (int)($c['userId'] ?? 0), 'templates' => $tpls];
+        }
+        return $out;
     }
 
     /**
@@ -491,14 +543,7 @@ class FingerprintController
         } catch (\Throwable $e) {
             return $this->json($response, ['ok' => false, 'error' => 'llaves_no_disponibles'], 500);
         }
-        $readers = [];
-        $r = $this->runExeLines(['list-readers']);
-        if ($r['ok']) {
-            foreach ($r['lines'] as $line) {
-                $j = json_decode(trim($line), true);
-                if (is_array($j) && isset($j['serial'])) $readers[] = ['serial' => (string)$j['serial'], 'name' => (string)($j['name'] ?? '')];
-            }
-        }
+        $readers = array_map(fn($l) => ['serial' => $l['serial'], 'name' => $l['name']], $this->lectores());
         return $this->json($response, ['ok' => true, 'v' => BiometricProtocol::VERSION] + $id + ['readers' => $readers]);
     }
 
@@ -527,6 +572,11 @@ class FingerprintController
             return $this->json($response, ['ok' => false, 'error' => 'reto_invalido'], 400);
         }
 
+        // Tiempos para diagnosticar la demora (ms desde que llegó la petición). Sin plantillas.
+        $t0 = (float)($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
+        $ms = static fn(): int => (int)round((microtime(true) - $t0) * 1000);
+        $tiempos = [];
+
         $proto = new BiometricProtocol();
         try {
             $payload = $proto->open($challenge, $body['sealed'] ?? null);
@@ -550,15 +600,24 @@ class FingerprintController
             return $this->json($response, ['ok' => false, 'error' => 'candidatos_invalidos'], 400);
         }
 
+        $tiempos['abierto'] = $ms();
         $reader = $this->firstReaderSerial();
+        $tiempos['lector'] = $ms();
         if ($reader === '') {
             return $this->json($response, ['ok' => false, 'error' => 'lector_no_detectado'], 503);
+        }
+        $candidates = $this->plantillasDeLaMarca($candidates, $reader);
+        if (count($candidates) === 0) {
+            return $this->json($response, ['ok' => false, 'error' => 'sin_huellas_de_este_lector'], 404);
         }
 
         $tmp = tempnam(sys_get_temp_dir(), 'fpa_');
         try {
             file_put_contents($tmp, json_encode(['candidates' => $candidates], JSON_UNESCAPED_UNICODE));
-            $result = $this->runExe([
+            $exeAuth = $this->exeParaLector($reader, true);
+            $this->traerAlFrente(pathinfo($exeAuth, PATHINFO_FILENAME));
+            $tiempos['exe'] = $ms();
+            $result = $this->runExe(array_merge([
                 'identify',
                 '--reader',
                 $reader,
@@ -566,13 +625,14 @@ class FingerprintController
                 $tmp,
                 '--timeoutMs',
                 '60000',
-            ], 120, is_file($this->exeAuthPath) ? $this->exeAuthPath : null);
+            ], $this->esZk($reader) ? ['--modo', 'autorizar'] : []), 120, $exeAuth);
         } finally {
             @unlink($tmp);
         }
+        $tiempos['fin'] = $ms();
 
         // Sin plantillas: solo lo necesario para diagnosticar.
-        @file_put_contents('C:\temp\nprint_authorize.log', date('c') . ' ' . json_encode(array_intersect_key($result, array_flip(['ok', 'error', 'matched', 'userId', 'exitCode', 'timeoutSec']))) . ' stderr=' . substr((string)($result['stderr'] ?? ''), 0, 300) . PHP_EOL, FILE_APPEND);
+        @file_put_contents('C:\temp\nprint_authorize.log', date('c') . ' ' . json_encode(array_intersect_key($result, array_flip(['ok', 'error', 'matched', 'userId', 'exitCode', 'timeoutSec']))) . ' ms=' . json_encode($tiempos) . ' stderr=' . substr((string)($result['stderr'] ?? ''), 0, 300) . PHP_EOL, FILE_APPEND);
 
         if (($result['ok'] ?? false) !== true) {
             $raw = (string)($result['raw'] ?? '');
@@ -598,37 +658,33 @@ class FingerprintController
         ]);
     }
 
-    // GET /fingerprint/list-readers
+    /**
+     * Lanza, sin esperarlo, el ayudante que pone al frente la ventana del lector apenas aparece.
+     * El lector DigitalPersona solo lee con su ventana ACTIVA, y Windows no deja que un programa abierto por PHP
+     * se active solo: sin esto había que darle clic a la ventana antes de poner el dedo.
+     */
+    private function traerAlFrente(string $proceso): void
+    {
+        $ps1 = __DIR__ . '/../bin/finger/traer_al_frente.ps1';
+        if (!is_file($ps1) || !preg_match('/^[A-Za-z0-9_.-]+$/', $proceso)) return;
+        $cmd = 'start "" /B powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File '
+            . escapeshellarg(realpath($ps1) ?: $ps1) . ' -Proceso ' . $proceso . ' -Segundos 20';
+        $h = @popen($cmd, 'r');
+        if ($h !== false) @pclose($h);
+    }
+
     // GET /fingerprint/list-readers
     public function listReaders(Request $request, Response $response): Response
     {
         try {
 
-            $r = $this->runExeLines(['list-readers']);
-            if (!$r['ok']) return $this->json($response, $r, 500);
-
-            $readers = [];
-            $count = 0;
-
-            foreach ($r['lines'] as $line) {
-                $line = trim($line);
-                if ($line === '') continue;
-
-                $j = json_decode($line, true);
-                if (!is_array($j)) continue;
-
-                if (isset($j['count'])) $count = (int)$j['count'];
-
-                // cada item trae serial + name
-                if (isset($j['serial']) && isset($j['name'])) {
-                    $readers[] = [
-                        'serial' => (string)$j['serial'],
-                        'name' => (string)$j['name'],
-                    ];
-                }
+            if (!is_file($this->exePath) && !is_file($this->exeZkPath)) {
+                return $this->json($response, ['ok' => false, 'error' => 'finger_exe_not_found'], 500);
             }
+            // DigitalPersona y ZKTeco: Admin muestra la lista tal cual (serial + name).
+            $readers = array_map(fn($l) => ['serial' => $l['serial'], 'name' => $l['name']], $this->lectores());
 
-            return $this->json($response, ['ok' => true, 'count' => $count, 'readers' => $readers], 200);
+            return $this->json($response, ['ok' => true, 'count' => count($readers), 'readers' => $readers], 200);
         } catch (\Exception $e) {
             $code = 500;
 
