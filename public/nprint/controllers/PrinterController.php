@@ -417,7 +417,26 @@ class PrinterController
      */
     private function mbLen(string $s): int
     {
-        return function_exists('mb_strlen') ? mb_strlen($s, 'UTF-8') : strlen($s);
+        if (function_exists('mb_strlen')) {
+            return mb_strlen($s, 'UTF-8');
+        }
+        $n = preg_match_all('/./us', $s);
+        return $n === false ? strlen($s) : $n;
+    }
+
+    /**
+     * Subcadena por CARACTERES sin `mbstring`. `substr` corta por bytes y, con
+     * acentos («Agua Mineral Félix»), puede partir la «é» a la mitad: el texto
+     * deja de ser UTF-8 válido y escpos-php truena con "Input must be UTF-8"
+     * («La entrada debe ser UTF-8»), así que la nota no sale. PCRE con `/u`
+     * siempre está en PHP. Si el texto ya venía roto, se usa `substr` tal cual.
+     */
+    private function utf8Sub(string $s, int $start, ?int $length = null): string
+    {
+        if (preg_match_all('/./us', $s, $m) === false) {
+            return $length === null ? substr($s, $start) : substr($s, $start, $length);
+        }
+        return implode('', array_slice($m[0], $start, $length));
     }
 
     private function mbSub(string $s, int $start, ?int $length = null): string
@@ -425,7 +444,7 @@ class PrinterController
         if (function_exists('mb_substr')) {
             return $length === null ? mb_substr($s, $start, null, 'UTF-8') : mb_substr($s, $start, $length, 'UTF-8');
         }
-        return $length === null ? substr($s, $start) : substr($s, $start, $length);
+        return $this->utf8Sub($s, $start, $length);
     }
 
     /**
@@ -3939,7 +3958,7 @@ class PrinterController
         if (function_exists('mb_substr')) {
             return $length === null ? mb_substr($text, $start) : mb_substr($text, $start, $length);
         }
-        return $length === null ? substr($text, $start) : substr($text, $start, $length);
+        return $this->utf8Sub($text, (int) $start, $length === null ? null : (int) $length);
     }
 
     /**
@@ -3953,7 +3972,7 @@ class PrinterController
         // Imprimir encabezados
         $header = '';
         foreach ($columns as $i => $col) {
-            $header .= str_pad(substr($col, 0, $colWidth), $colWidth);
+            $header .= str_pad($this->safeSubstr($col, 0, (int) $colWidth), $colWidth);
             if ($i < $colCount - 1) $header .= ' ';
         }
         $printer->setEmphasis(true);
@@ -3968,7 +3987,7 @@ class PrinterController
             $line = '';
             foreach ($columns as $i => $col) {
                 $cellValue = isset($row[$col]) ? $row[$col] : '';
-                $line .= str_pad(substr($cellValue, 0, $colWidth), $colWidth);
+                $line .= str_pad($this->safeSubstr((string) $cellValue, 0, (int) $colWidth), $colWidth);
                 if ($i < $colCount - 1) $line .= ' ';
             }
             $printer->text($line . "\n");
