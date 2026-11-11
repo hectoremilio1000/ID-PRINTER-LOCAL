@@ -18,3 +18,6 @@ public/nprint/.env
 .DS_Store
 # Bitácora local de impresiones (rastreo del POS) — cambia en cada ticket
 public/nprint/data/print_jobs.sqlite*
+
+# Ajustes locales del watchdog (por PC). El estado y la bitácora van en logs/watchdog/
+watchdog/config.json
