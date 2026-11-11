@@ -123,6 +123,18 @@ $app->get('/hello/{name}', function (Request $request, Response $response, $args
 
 $app->get('/hello', [HelloController::class, 'index']);
 
+/* Qué sabe hacer ESTE ID-Printer. El front lo consulta antes de mandar un ticket que una versión vieja
+ * imprimiría mal (p. ej. el cierre ciego: una versión vieja pinta "$0.00" en las cifras que no llegan).
+ * Una PC sin esta ruta responde 404 (o el navegador lo ve como error de red/CORS): el front lo toma
+ * como "no soporta". Agregar aquí cada capacidad nueva; nunca quitar una que siga funcionando. */
+$app->get('/capabilities', function (Request $request, Response $response) {
+    $response->getBody()->write(json_encode([
+        'ok' => true,
+        'capabilities' => ['cierre_caja_visibility'],
+    ], JSON_UNESCAPED_UNICODE));
+    return $response->withHeader('Content-Type', 'application/json');
+});
+
 // Rutas de impresoras
 $app->group('/printers', function ($group) {
     $group->get('', [PrinterController::class, 'list']);
