@@ -94,9 +94,30 @@ Function EstaCorriendo(nombreExe)
     On Error GoTo 0
 End Function
 
+' Con dos PHP (tickets y huella), tasklist ya no distingue cual falta: se revisa cada puerto.
+' Se compara contra 0.0.0.0:0 (columna remota) porque el estado sale traducido segun el idioma de Windows.
+Function PuertoEnEscucha(ipPuerto)
+    PuertoEnEscucha = False
+    tmp = shell.ExpandEnvironmentStrings("%TEMP%") & "\idprinter_port_" & Replace(ipPuerto, ":", "_") & ".txt"
+    On Error Resume Next
+    shell.Run "cmd /c netstat -an -p tcp > """ & tmp & """ 2>&1", 0, True
+    If fso.FileExists(tmp) Then
+        Set f = fso.OpenTextFile(tmp, 1)
+        contenido = f.ReadAll
+        f.Close
+        fso.DeleteFile tmp
+        Set re = New RegExp
+        re.Pattern = Replace(ipPuerto, ".", "\.") & "\s+0\.0\.0\.0:0"
+        PuertoEnEscucha = re.Test(contenido)
+    End If
+    On Error GoTo 0
+End Function
+
 lanzoPhp = False
+lanzoPhpHuella = False
 lanzoCaddy = False
-phpCorriendo = EstaCorriendo("php.exe")
+phpCorriendo = PuertoEnEscucha("0.0.0.0:8080")
+phpHuellaCorriendo = PuertoEnEscucha("127.0.0.1:8081")
 caddyCorriendo = EstaCorriendo("caddy.exe")
 tDeteccion = Timer
 
@@ -110,6 +131,16 @@ If Not phpCorriendo Then
              " -S 0.0.0.0:8080 -t """ & docRoot & """"
     shell.Run phpCmd, 0, False
     lanzoPhp = True
+End If
+
+' PHP solo para huella (puerto 8081, solo local): Caddy le manda /nprint/fingerprint/*
+If Not phpHuellaCorriendo Then
+    phpHuellaCmd = """" & phpExe & """" & _
+             " -d openssl.cafile=""" & caBundle & """" & _
+             " -d curl.cainfo=""" & caBundle & """" & _
+             " -S 127.0.0.1:8081 -t """ & docRoot & """"
+    shell.Run phpHuellaCmd, 0, False
+    lanzoPhpHuella = True
 End If
 
 ' Iniciar Caddy en background (usando Caddyfile)
@@ -129,9 +160,10 @@ If esSilencioso Then
     logT.Close
 End If
 
-If lanzoPhp Or lanzoCaddy Then
+If lanzoPhp Or lanzoPhpHuella Or lanzoCaddy Then
     detalle = ""
     If lanzoPhp Then detalle = detalle & "php iniciado. "
+    If lanzoPhpHuella Then detalle = detalle & "php de huella iniciado. "
     If lanzoCaddy Then detalle = detalle & "caddy iniciado. "
     If Not lanzoPhp Then detalle = detalle & "php ya estaba corriendo. "
     If Not lanzoCaddy Then detalle = detalle & "caddy ya estaba corriendo. "

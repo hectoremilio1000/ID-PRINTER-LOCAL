@@ -154,6 +154,8 @@ $app->group('/fingerprint', function ($group) {
     $group->post('/enroll', [FingerprintController::class, 'enroll']);
     $group->post('/verify', [FingerprintController::class, 'verify']);
     $group->post('/identify', [FingerprintController::class, 'identify']);
+    $group->get('/v1/identity', [FingerprintController::class, 'v1Identity']);
+    $group->post('/v1/authorize', [FingerprintController::class, 'v1Authorize']);
     $group->get('/enroll/debug', [FingerprintController::class, 'enrollDebug']);
 });
 

@@ -6,6 +6,9 @@
 
 :9443 {
     tls cert/certificado.pem cert/llave.pem
+    # La huella espera hasta 60 s al dedo: va a su propio PHP para no detener los tickets.
+    @huella path /nprint/fingerprint/*
+    reverse_proxy @huella 127.0.0.1:8081
     reverse_proxy 127.0.0.1:8080
     encode gzip
     log {
