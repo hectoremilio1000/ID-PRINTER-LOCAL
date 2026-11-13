@@ -21,9 +21,31 @@ t0 = Timer
 ' modo los avisos se escriben en servidor.log en vez de mostrarse en
 ' pantalla. Doble clic manual sigue mostrando los mensajes de siempre.
 esSilencioso = False
+' /vigilante: lo llama vigilante.vbs cada 30 s para levantar lo que se haya caido.
+' En ese modo solo escribe en el log cuando de verdad levanta algo.
+desdeVigilante = False
 For i = 0 To WScript.Arguments.Count - 1
     If LCase(WScript.Arguments(i)) = "/silent" Then esSilencioso = True
+    If LCase(WScript.Arguments(i)) = "/vigilante" Then desdeVigilante = True
 Next
+If desdeVigilante Then esSilencioso = True
+
+' Archivos del vigilante (en logs\, que no va en git).
+logsDir = baseDir & "\logs"
+banderaDetener = logsDir & "\detener.flag"
+latidoVigilante = logsDir & "\vigilante.latido"
+vigilanteVbs = baseDir & "\vigilante.vbs"
+If Not fso.FolderExists(logsDir) Then fso.CreateFolder logsDir
+
+' Detener_servidor.vbs deja esta bandera: el vigilante no debe volver a levantar nada.
+' Un arranque manual o de la tarea de Windows si la quita (alguien pidio iniciar).
+If desdeVigilante Then
+    If fso.FileExists(banderaDetener) Then WScript.Quit
+ElseIf fso.FileExists(banderaDetener) Then
+    On Error Resume Next
+    fso.DeleteFile banderaDetener
+    On Error GoTo 0
+End If
 
 Sub Avisar(mensaje, esError)
     If esSilencioso Then
@@ -113,11 +135,24 @@ Function PuertoEnEscucha(ipPuerto)
     On Error GoTo 0
 End Function
 
+' El vigilante deja un latido cada vuelta; si es reciente, ya hay uno corriendo.
+Function VigilanteVivo()
+    VigilanteVivo = False
+    On Error Resume Next
+    If fso.FileExists(latidoVigilante) Then
+        If DateDiff("s", fso.GetFile(latidoVigilante).DateLastModified, Now) < 90 Then VigilanteVivo = True
+    End If
+    On Error GoTo 0
+End Function
+
 lanzoPhp = False
 lanzoPhpHuella = False
+lanzoPhpConsultas = False
 lanzoCaddy = False
+lanzoVigilante = False
 phpCorriendo = PuertoEnEscucha("0.0.0.0:8080")
 phpHuellaCorriendo = PuertoEnEscucha("127.0.0.1:8081")
+phpConsultasCorriendo = PuertoEnEscucha("127.0.0.1:8082")
 caddyCorriendo = EstaCorriendo("caddy.exe")
 tDeteccion = Timer
 
@@ -143,6 +178,18 @@ If Not phpHuellaCorriendo Then
     lanzoPhpHuella = True
 End If
 
+' PHP solo para consultas (puerto 8082, solo local): Caddy le manda GET /nprint/jobs y
+' /nprint/printers, que corren PowerShell y tardan segundos. Asi no forman a los tickets.
+' Mismo php.exe, mismas opciones y misma carpeta que el de tickets.
+If Not phpConsultasCorriendo Then
+    phpConsultasCmd = """" & phpExe & """" & _
+             " -d openssl.cafile=""" & caBundle & """" & _
+             " -d curl.cainfo=""" & caBundle & """" & _
+             " -S 127.0.0.1:8082 -t """ & docRoot & """"
+    shell.Run phpConsultasCmd, 0, False
+    lanzoPhpConsultas = True
+End If
+
 ' Iniciar Caddy en background (usando Caddyfile)
 If Not caddyCorriendo Then
     caddyCmd = """" & caddyExe & """" & " run --config """ & caddyfile & """ --adapter caddyfile"
@@ -150,7 +197,28 @@ If Not caddyCorriendo Then
     lanzoCaddy = True
 End If
 
+' Vigilante: revisa cada 30 s y vuelve a levantar lo que se haya caido.
+If Not desdeVigilante And fso.FileExists(vigilanteVbs) And Not VigilanteVivo() Then
+    shell.Run "wscript.exe """ & vigilanteVbs & """", 0, False
+    lanzoVigilante = True
+End If
+
 tLanzamiento = Timer
+lanzoAlgo = lanzoPhp Or lanzoPhpHuella Or lanzoPhpConsultas Or lanzoCaddy
+
+' Desde el vigilante, si todo estaba arriba no se escribe nada (correria cada 30 s).
+If desdeVigilante Then
+    If lanzoAlgo Then
+        detalle = ""
+        If lanzoPhp Then detalle = detalle & "php de tickets (8080). "
+        If lanzoPhpHuella Then detalle = detalle & "php de huella (8081). "
+        If lanzoPhpConsultas Then detalle = detalle & "php de consultas (8082). "
+        If lanzoCaddy Then detalle = detalle & "caddy. "
+        Avisar "Vigilante: se volvio a levantar " & Trim(detalle), True
+    End If
+    WScript.Quit
+End If
+
 If esSilencioso Then
     Set logT = fso.OpenTextFile(logFile, 8, True)
     logT.WriteLine Now & " [T] tiempos(s): archivos " & FormatNumber((tArchivos - t0), 1) & _
@@ -160,11 +228,13 @@ If esSilencioso Then
     logT.Close
 End If
 
-If lanzoPhp Or lanzoPhpHuella Or lanzoCaddy Then
+If lanzoAlgo Then
     detalle = ""
     If lanzoPhp Then detalle = detalle & "php iniciado. "
     If lanzoPhpHuella Then detalle = detalle & "php de huella iniciado. "
+    If lanzoPhpConsultas Then detalle = detalle & "php de consultas iniciado. "
     If lanzoCaddy Then detalle = detalle & "caddy iniciado. "
+    If lanzoVigilante Then detalle = detalle & "vigilante iniciado. "
     If Not lanzoPhp Then detalle = detalle & "php ya estaba corriendo. "
     If Not lanzoCaddy Then detalle = detalle & "caddy ya estaba corriendo. "
     Avisar "Servidor iniciado en segundo plano. (" & Trim(detalle) & ")" & vbCrLf & _

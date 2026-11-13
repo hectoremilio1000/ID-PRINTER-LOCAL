@@ -9,6 +9,21 @@
     # La huella espera hasta 60 s al dedo: va a su propio PHP para no detener los tickets.
     @huella path /nprint/fingerprint/*
     reverse_proxy @huella 127.0.0.1:8081
+
+    # Consultas que corren PowerShell (estado de trabajos y lista de impresoras): tardan
+    # varios segundos y el PHP integrado atiende una petición a la vez. Van a su propio
+    # PHP (8082) para que nunca formen en fila a un ticket. Si ese PHP no contesta, Caddy
+    # las manda al de los tickets (8080) y lo vuelve a intentar con el 8082 en 30 s.
+    @consultas {
+        method GET OPTIONS
+        path /nprint/jobs /nprint/jobs/* /nprint/printers
+    }
+    reverse_proxy @consultas 127.0.0.1:8082 127.0.0.1:8080 {
+        lb_policy first
+        lb_try_duration 3s
+        fail_duration 30s
+    }
+
     reverse_proxy 127.0.0.1:8080
     encode gzip
     log {

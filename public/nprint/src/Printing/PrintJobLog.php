@@ -218,6 +218,35 @@ class PrintJobLog
         }
     }
 
+    /**
+     * Como actualizar(), pero solo si el trabajo sigue en el estado que se leyó.
+     * La consulta de estado (GET /nprint/jobs) corre en otro proceso PHP y tarda
+     * segundos con PowerShell: si mientras tanto el proceso de tickets volvió a
+     * recibir ese mismo trabajo (reintento tras un rechazo), no se le pisa.
+     * Devuelve false si no se actualizó.
+     */
+    public static function actualizarSiSigue(string $uid, string $statusLeido, array $campos): bool
+    {
+        $db = self::db();
+        if (!$db || !$campos) return false;
+        try {
+            $sets = [];
+            $vals = [];
+            foreach ($campos as $col => $val) {
+                $sets[] = $col . ' = ?';
+                $vals[] = $val;
+            }
+            $vals[] = $uid;
+            $vals[] = $statusLeido;
+            $stmt = $db->prepare('UPDATE print_jobs SET ' . implode(', ', $sets) . ' WHERE job_uid = ? AND status = ?');
+            $stmt->execute($vals);
+            return $stmt->rowCount() > 0;
+        } catch (Throwable $e) {
+            error_log('[PrintJobLog] actualizarSiSigue: ' . $e->getMessage());
+            return false;
+        }
+    }
+
     /** @return array<string, array> indexado por job_uid */
     public static function obtener(array $uids): array
     {
