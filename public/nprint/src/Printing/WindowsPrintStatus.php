@@ -304,7 +304,12 @@ class WindowsPrintStatus
 
     private static function guardar(array $j, array $campos): array
     {
-        PrintJobLog::actualizar((string) $j['job_uid'], $campos);
-        return array_merge($j, $campos);
+        $uid = (string) $j['job_uid'];
+        if (PrintJobLog::actualizarSiSigue($uid, (string) $j['status'], $campos)) {
+            return array_merge($j, $campos);
+        }
+        // El trabajo cambió mientras se consultaba Windows (otro proceso lo volvió a
+        // recibir): se responde con lo que hay ahora en la bitácora, sin pisarlo.
+        return PrintJobLog::obtener([$uid])[$uid] ?? $j;
     }
 }
