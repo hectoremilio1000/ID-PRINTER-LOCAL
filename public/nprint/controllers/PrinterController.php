@@ -1304,11 +1304,36 @@ class PrinterController
                                 }
                                 $raya();
                             }
+                            // Desglose efectivo / tarjeta (Admin y Caja desde 2026-11-13). Payloads viejos no traen
+                            // estas llaves → no se imprime nada nuevo y el ticket sale como siempre.
+                            $conDesglose = false;
+                            $saleCash = $saleCard = $tipCash = $tipCard = 0.0;
+                            foreach ($entries as $entry) {
+                                if (array_key_exists('tipCash', $entry) || array_key_exists('saleCash', $entry)) $conDesglose = true;
+                                $saleCash += (float) ($entry['saleCash'] ?? 0);
+                                $saleCard += (float) ($entry['saleCard'] ?? 0);
+                                $tipCash += (float) ($entry['tipCash'] ?? 0);
+                                $tipCard += (float) ($entry['tipCard'] ?? 0);
+                            }
+                            $renglon = function (string $etiqueta, float $monto) use ($printer, $wSep) {
+                                $valor = $this->formatMoney($monto);
+                                $printer->text(str_pad($etiqueta, max(1, $wSep - strlen($valor))) . $valor . "\n");
+                            };
                             if ($waiterSale > 0 && $V('total_venta')) {
                                 $fx($pd);
+                                // Sin desglose real (todo en 0) no se imprime: diría "$0 / $0" junto a una venta que sí hubo.
+                                if ($conDesglose && ($saleCash + $saleCard) > 0.005) {
+                                    $renglon("  Venta efectivo:", $saleCash);
+                                    $renglon("  Venta tarjeta:", $saleCard);
+                                }
                                 $printer->setEmphasis(true);
                                 $printer->text("Total de venta: " . $this->formatMoney($waiterSale) . "\n");
                                 $printer->setEmphasis(false);
+                            }
+                            if ($conDesglose && ($tipCash + $tipCard) > 0.005) {
+                                $fx($pd);
+                                $renglon("  Propina efectivo:", $tipCash);
+                                $renglon("  Propina tarjeta:", $tipCard);
                             }
                             $printer->feed(1);
                             if ($est === null) {
@@ -1367,6 +1392,230 @@ class PrinterController
                 'success' => 0,
                 'message' => 'Error al procesar el request: ' . $e->getMessage()
             ], JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
+        }
+    }
+
+    /**
+     * Al final del Corte X: «Cancelaciones y anulaciones de órdenes / de platillos» (como SoftRestaurant).
+     * `$c` = { ordenes: [{folio, usuario, estatus, total}], platillos: [{folio, usuario, estatus, total, producto?,
+     * cantidad?}], totalOrdenes, totalPlatillos }. Cancelación = cuenta completa; anulación = platillos.
+     */
+    private function printCancelacionesTurno($printer, array $c, $fecha = null): void
+    {
+        $W = 48;
+        $dia = '';
+        if ($fecha) {
+            $ts = strtotime((string) $fecha);
+            if ($ts) $dia = ' del ' . date('d/m/Y', $ts);
+        }
+        $bloque = function (string $titulo, array $rows, $total, bool $conProducto) use ($printer, $W, $dia) {
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+            $printer->setTextSize(1, 1);
+            $printer->text(str_repeat('-', $W) . "\n");
+            $printer->setEmphasis(true);
+            $printer->text($titulo . $dia . "\n");
+            $printer->setEmphasis(false);
+            $printer->text('Total: ' . $this->formatMoney($total) . "\n");
+            $printer->text(str_repeat('-', $W) . "\n");
+            if (!$rows) {
+                $printer->text("Sin registros en el turno.\n");
+                return;
+            }
+            $printer->setEmphasis(true);
+            $printer->text(str_pad('Orden', 8) . str_pad('Usuario', 17) . str_pad('Estatus', 12) . str_pad('Total', 11, ' ', STR_PAD_LEFT) . "\n");
+            $printer->setEmphasis(false);
+            foreach ($rows as $r) {
+                if (!is_array($r)) continue;
+                $folio = $this->safeSubstr((string) ($r['folio'] ?? ''), 0, 7);
+                $usuario = $this->safeSubstr((string) ($r['usuario'] ?? ''), 0, 16);
+                $estatus = $this->safeSubstr((string) ($r['estatus'] ?? ''), 0, 11);
+                $importe = $this->formatMoney($r['total'] ?? 0);
+                // Relleno por caracteres (no bytes): nombres con acento no deben correr el importe.
+                $pad = fn(string $t, int $n) => $t . str_repeat(' ', max(0, $n - mb_strlen($t)));
+                $linea = $pad($folio, 8) . $pad($usuario, 17) . $pad($estatus, 12);
+                $printer->text($linea . str_pad($importe, max(1, $W - mb_strlen($linea)), ' ', STR_PAD_LEFT) . "\n");
+                if ($conProducto && !empty($r['producto'])) {
+                    $cant = !empty($r['cantidad']) ? ((string) (0 + $r['cantidad'])) . ' ' : '';
+                    $printer->text('  ' . $this->safeSubstr($cant . $r['producto'], 0, $W - 2) . "\n");
+                }
+            }
+            $printer->setEmphasis(true);
+            $this->printTwoColumnLine($printer, '', 'Total: ' . $this->formatMoney($total), $W);
+            $printer->setEmphasis(false);
+        };
+        $printer->feed(1);
+        $bloque('Cancelaciones de ordenes', is_array($c['ordenes'] ?? null) ? $c['ordenes'] : [], $c['totalOrdenes'] ?? 0, false);
+        $bloque('Anulaciones de platillos', is_array($c['platillos'] ?? null) ? $c['platillos'] : [], $c['totalPlatillos'] ?? 0, true);
+        $printer->text(str_repeat('-', $W) . "\n");
+    }
+
+    /**
+     * REPORTE CORTE MESERO (Symphonie, 2026-11-13) — como el de SoftRestaurant, sin IEPS/DXU/Megapuntos/anticipos.
+     * POST /printers/print-corte-mesero
+     *
+     * Body: { printerName, jobUid?, data: { restaurante?, periodo?, turno?, meseros: [ <respuesta de
+     *          GET /reports/waiter-cut → meseros[]> ] } } — o un arreglo de esos jobs.
+     * Un ticket por mesero, cortando el papel entre uno y otro (mismo criterio que print-propinas).
+     */
+    public function printCorteMesero(Request $request, Response $response, $args = [])
+    {
+        try {
+            $jobs = $request->getParsedBody();
+            if (!is_array($jobs)) {
+                $jobs = json_decode((string) $request->getBody(), true);
+            }
+            if (isset($jobs['printerName']) && isset($jobs['data'])) {
+                $jobs = [$jobs];
+            }
+            if (!is_array($jobs)) {
+                $response->getBody()->write(json_encode(['success' => 0, 'message' => 'El cuerpo debe ser un array JSON válido.'], JSON_UNESCAPED_UNICODE));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $results = [];
+            foreach ($jobs as $job) {
+                $printerName = $job['printerName'] ?? null;
+                $data = is_array($job['data'] ?? null) ? $job['data'] : [];
+                $meseros = array_values(array_filter($data['meseros'] ?? [], 'is_array'));
+                if (!$printerName) {
+                    $results[] = ['success' => 0, 'message' => 'Nombre de impresora es requerido', 'printer_name' => $printerName];
+                    continue;
+                }
+                if (!$meseros) {
+                    $results[] = ['success' => 0, 'message' => 'No hay meseros con ventas en el periodo', 'printer_name' => $printerName];
+                    continue;
+                }
+
+                $printer = null;
+                $printerClosed = false;
+                $connector = null;
+                try {
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
+                    $printer = new Printer($connector);
+                    $this->iniciarTicket($printer);
+                    $W = 48;
+                    $m = fn($v) => $this->formatMoney($v);
+                    $n = fn($v) => is_numeric($v) ? rtrim(rtrim(number_format((float) $v, 2, '.', ''), '0'), '.') : '0';
+                    $raya = fn() => $printer->text(str_repeat('-', $W) . "\n");
+                    $seccion = function (string $t) use ($printer, $raya) {
+                        $raya();
+                        $printer->setJustification(Printer::JUSTIFY_CENTER);
+                        $printer->setEmphasis(true);
+                        $printer->text($t . "\n");
+                        $printer->setEmphasis(false);
+                        $printer->setJustification(Printer::JUSTIFY_LEFT);
+                        $raya();
+                    };
+                    $dos = fn(string $l, string $r) => $this->printTwoColumnLine($printer, $l, $r, $W);
+                    $fuerte = function (string $l, string $r) use ($printer, $dos) {
+                        $printer->setEmphasis(true);
+                        $dos($l, $r);
+                        $printer->setEmphasis(false);
+                    };
+                    // «Etiqueta  N  $monto»: la cantidad en su columna, el importe a la derecha.
+                    $tres = function (string $l, $c) use ($dos, $m, $n) {
+                        $c = is_array($c) ? $c : [];
+                        $dos(str_pad($l, 32) . str_pad($n($c['cantidad'] ?? 0), 4, ' ', STR_PAD_LEFT), $m($c['monto'] ?? 0));
+                    };
+
+                    foreach ($meseros as $ms) {
+                        $tot = $ms['totales'] ?? [];
+                        $ven = $ms['ventas'] ?? [];
+                        $pro = $ms['propinas'] ?? [];
+                        $ctl = $ms['control'] ?? [];
+                        $op = $ms['operativa'] ?? [];
+
+                        $printer->setJustification(Printer::JUSTIFY_CENTER);
+                        $printer->setEmphasis(true);
+                        $printer->setTextSize(1, 2);
+                        $printer->text("Reporte Corte Mesero\n");
+                        $printer->setTextSize(1, 1);
+                        $printer->setEmphasis(false);
+                        if (!empty($data['restaurante'])) $printer->text($data['restaurante'] . "\n");
+                        $printer->setJustification(Printer::JUSTIFY_LEFT);
+                        $raya();
+                        if (!empty($data['periodo'])) $dos('Fecha:', (string) $data['periodo']);
+                        if (!empty($data['turno'])) $dos('Turno:', (string) $data['turno']);
+                        $dos('Mesero:', strtoupper((string) ($ms['waiterName'] ?? '')));
+
+                        $seccion('TOTALES GENERALES');
+                        $dos('Total de Venta s/Impts', $m($tot['ventaSinImpuestos'] ?? 0));
+                        $dos('IVA', $m($tot['iva'] ?? 0));
+                        $fuerte('Total de Venta c/Impts', $m($tot['ventaConImpuestos'] ?? 0));
+
+                        $seccion('VENTAS POR FORMA DE PAGO');
+                        $dos('Efectivo', $m($ven['efectivo'] ?? 0));
+                        $dos('Tarjeta', $m($ven['tarjeta'] ?? 0));
+                        $fuerte('Total Ventas:', $m($ven['total'] ?? 0));
+
+                        $seccion('PROPINA POR FORMA DE PAGO');
+                        $dos('Efectivo', $m($pro['efectivo'] ?? 0));
+                        $dos('Tarjeta', $m($pro['tarjeta'] ?? 0));
+                        $fuerte('Total Propina:', $m($pro['total'] ?? 0));
+
+                        $seccion('CONTROL POR FORMA DE PAGO');
+                        foreach (['efectivo' => 'Efectivo', 'tarjeta' => 'Tarjeta'] as $k => $titulo) {
+                            $c = $ctl[$k] ?? [];
+                            $printer->setEmphasis(true);
+                            $printer->text($titulo . "\n");
+                            $printer->setEmphasis(false);
+                            $dos('(+) Por Ventas:', $m($c['ventas'] ?? 0));
+                            $dos('(+) Por Propina:', $m($c['propina'] ?? 0));
+                            $fuerte('Total ' . $titulo . ':', $m($c['total'] ?? 0));
+                        }
+
+                        $seccion('INFORMACION OPERATIVA');
+                        $dos('Total de Ordenes:', $n($op['ordenes'] ?? 0));
+                        $dos('Total de Platillos:', $n($op['platillos'] ?? 0));
+                        $dos('Total de Personas:', $n($op['personas'] ?? 0));
+                        $dos('Promedio platillos / orden:', $n($op['promPlatillosPorOrden'] ?? 0));
+                        $dos('Promedio $ / orden:', $m($op['promPorOrden'] ?? 0));
+                        $dos('Promedio $ / persona:', $m($op['promPorPersona'] ?? 0));
+                        $printer->feed(1);
+                        $tres('Ventas en mesa:', $op['ventasEnMesa'] ?? null);
+                        $tres('Ventas a domicilio:', $op['ventasADomicilio'] ?? null);
+                        $tres('Ventas para llevar:', $op['ventasParaLlevar'] ?? null);
+                        $tres('Cortesias en Cuentas:', $op['cortesiasEnCuentas'] ?? null);
+                        $tres('Cortesias en Platillos:', $op['cortesiasEnPlatillos'] ?? null);
+                        $tres('Cancelaciones de Cuentas:', $op['cancelacionesDeCuentas'] ?? null);
+                        $tres('Anulaciones en Platillos:', $op['anulacionesEnPlatillos'] ?? null);
+                        $tres('Descuentos en Cuentas:', $op['descuentosEnCuentas'] ?? null);
+                        $tres('Descuentos en Platillos:', $op['descuentosEnPlatillos'] ?? null);
+                        $raya();
+                        $printer->text('Fecha impresion: ' . date('d/m/Y H:i:s') . "\n");
+                        $printer->feed(3);
+                        $printer->cut();
+                    }
+
+                    $this->repetirCopias($connector, $data);
+                    $printer->close();
+                    $printerClosed = true;
+                    $results[] = [
+                        'success' => 1,
+                        'message' => 'Se imprimieron ' . count($meseros) . ' corte(s) de mesero en ' . $printerName,
+                        'printer_name' => $printerName,
+                        'template' => 'corte_mesero',
+                        'tickets_printed' => count($meseros),
+                        'timestamp' => date('Y-m-d H:i:s'),
+                    ];
+                } catch (\Throwable $e) {
+                    $this->abortarTrabajo($connector ?? null, $job['jobUid'] ?? null, $e->getMessage());
+                    $results[] = ['success' => 0, 'message' => 'Error al imprimir: ' . $e->getMessage(), 'printer_name' => $printerName, 'error_type' => 'general'];
+                } finally {
+                    if ($printer && !$printerClosed) {
+                        try {
+                            $printer->close();
+                        } catch (\Throwable $inner) {
+                        }
+                    }
+                }
+            }
+
+            $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (\Throwable $e) {
+            $response->getBody()->write(json_encode(['success' => 0, 'message' => 'Error al procesar el request: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE));
             return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
         }
     }
@@ -1913,6 +2162,10 @@ class PrinterController
                     $this->iniciarTicket($printer);
 
                     $this->printCorteXBody($printer, $data);
+                    // Opcional por restaurante (2026-11-13): el backend solo manda `cancelaciones` si está prendido.
+                    if (isset($data['cancelaciones']) && is_array($data['cancelaciones'])) {
+                        $this->printCancelacionesTurno($printer, $data['cancelaciones'], $data['shift']['closedAt'] ?? null);
+                    }
 
                     $printer->feed(3);
                     $printer->cut();
