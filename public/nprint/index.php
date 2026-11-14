@@ -135,6 +135,7 @@ $app->group('/printers', function ($group) {
     $group->post('/print-comisiones', [PrinterController::class, 'printComisiones']);
     $group->post('/print-movtos', [PrinterController::class, 'printMovtos']);
     $group->post('/print-corte-x', [PrinterController::class, 'printCorteX']);
+    $group->post('/print-corte-mesero', [PrinterController::class, 'printCorteMesero']);
     $group->post('/print-reporte-caja', [PrinterController::class, 'printReporteCaja']);
     $group->post('/print-cierre-caja', [PrinterController::class, 'printCierreCaja']);
     $group->post('/print-consumo', [PrinterController::class, 'printConsumo']);
