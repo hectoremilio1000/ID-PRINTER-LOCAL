@@ -108,6 +108,8 @@ require __DIR__ . '/pruebas_tickets_taco.php';
 require __DIR__ . '/pruebas_total_descuentos.php';
 // «Juntar productos idénticos» de la comanda (campo comanda.agrupar_productos)
 require __DIR__ . '/pruebas_agrupar_comanda.php';
+// Cortes con formato Wansoft (reporte de caja, cierre de caja y reporte de turno; secciones apagadas por defecto)
+require __DIR__ . '/pruebas_cortes_wansoft.php';
 
 // el catálogo completo de los 11 tipos tiene prueba (salvo los de comanda/antro, que se cubren abajo)
 $pendientes = [];

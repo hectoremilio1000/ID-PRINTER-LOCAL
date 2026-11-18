@@ -147,6 +147,9 @@ final class CatalogoTicket
             'resumen_cuentas' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'cortesias_descuentos' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'declaraciones' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'control_por_metodo' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'info_operativa' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'ventas_por_producto' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
         ],
         'reporte_caja' => [
             'restaurante' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
@@ -158,6 +161,11 @@ final class CatalogoTicket
             'declaraciones_personales' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'resumen_final' => ['parte' => 'totales', 'def' => true, 'obl' => false],
             'pie_impreso' => ['parte' => 'pie', 'def' => true, 'obl' => false],
+            'totales_generales' => ['parte' => 'totales', 'def' => false, 'obl' => false],
+            'propinas_por_metodo' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'control_por_metodo' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'info_operativa' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'ventas_por_producto' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
         ],
         'cierre_caja' => [
             'restaurante' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
@@ -175,6 +183,9 @@ final class CatalogoTicket
             'totales_generales' => ['parte' => 'totales', 'def' => true, 'obl' => false],
             'conciliacion_por_metodo' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'info_operativa' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'propinas_por_metodo' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'control_por_metodo' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
+            'ventas_por_producto' => ['parte' => 'detalle', 'def' => false, 'obl' => false],
         ],
         'movimientos' => [
             'titulo' => ['parte' => 'titulo', 'def' => true, 'obl' => true],
