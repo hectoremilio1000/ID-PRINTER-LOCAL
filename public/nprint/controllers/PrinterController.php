@@ -2433,6 +2433,25 @@ class PrinterController
         $div();
         }
 
+        // ── Control por forma de pago de TODAS las cajas del turno (formato Wansoft; apagado por defecto) ──
+        if (!empty($cajas) && $V('control_por_metodo')) {
+            $porMetodo = [];
+            $fondo = $movs = $esperado = 0.0;
+            foreach ($cajas as $c) {
+                $fondo += (float) ($c['openingCash'] ?? 0);
+                $movs += (float) ($c['movements']['net'] ?? 0);
+                $esperado += (float) ($c['expectedCash'] ?? 0);
+                foreach (($c['methods'] ?? []) as $m) {
+                    $k = (string) ($m['name'] ?? '');
+                    $porMetodo[$k] ??= ['name' => $k, 'isCash' => !empty($m['isCash']), 'sales' => 0.0, 'tips' => 0.0];
+                    $porMetodo[$k]['sales'] += (float) ($m['sales'] ?? 0);
+                    $porMetodo[$k]['tips'] += (float) ($m['tips'] ?? 0);
+                }
+            }
+            $this->imprimirControlPorMetodo($printer, array_values($porMetodo), ['fondo' => $fondo, 'movimientos' => $movs, 'esperado' => $esperado], $W, $nb);
+            $div();
+        }
+
         // ── Venta por tipo/servicio ──
         $verCat = $V('por_categoria');
         $verSrv = $V('por_servicio');
@@ -2532,6 +2551,17 @@ class PrinterController
         $this->printTwoColumnLine($printer, 'TOTAL DECLARADO', $money($declarations['totalDeclared'] ?? 0), $W);
         $this->printTwoColumnLine($printer, 'SOBRANTE/FALTANTE', $money($declarations['totalDifference'] ?? 0), $W);
         $printer->setEmphasis($nb);
+        }
+
+        // ── Información operativa y ventas por producto de TODO el turno (formato Wansoft; apagados por defecto) ──
+        $opTurno = is_array($data['operational'] ?? null) ? $data['operational'] : null;
+        if ($opTurno !== null && $V('info_operativa')) {
+            $div();
+            $this->imprimirInfoOperativa($printer, $opTurno, $W, $nb);
+        }
+        if (is_array($data['productSales'] ?? null) && $V('ventas_por_producto')) {
+            $div();
+            $this->imprimirVentasPorProducto($printer, $data['productSales'], $W, $nb);
         }
 
         if ($est !== null) {
@@ -2663,6 +2693,163 @@ class PrinterController
     }
 
     /** Sin acentos: la térmica no siempre trae la página de códigos (mismo criterio que print-movtos). */
+    /** INFORMACION OPERATIVA de una caja o de todo el turno (mismo formato en reporte/cierre de caja y reporte de turno). */
+    private function imprimirInfoOperativa($printer, array $op, int $W, bool $nb): void
+    {
+        $t = function ($s) {
+            return $this->ticketSinAcentos($s);
+        };
+        $money = function ($v) {
+            return $this->formatMoney($v ?? 0);
+        };
+        $line = function ($left, $right) use ($printer, $W, $t) {
+            $this->printTwoColumnLine($printer, $t($left), $t($right), $W);
+        };
+        $sectionTitle = function (string $title) use ($printer, $nb) {
+            $printer->setEmphasis(true);
+            $printer->text($title . "\n");
+            $printer->setEmphasis($nb);
+        };
+        $sectionTitle('INFORMACION OPERATIVA');
+        $line('Cuentas cobradas', (string) ($op['orders'] ?? 0));
+        $line('Platillos', $this->cantidadLimpia($op['dishes'] ?? 0));
+        $line('Personas', (string) ($op['persons'] ?? 0));
+        $line('Prom. platillos / cuenta', $this->cantidadLimpia($op['avgDishesPerOrder'] ?? 0));
+        $line('Prom. $ / cuenta', $money($op['avgPerOrder'] ?? 0));
+        $line('Prom. $ / persona', $money($op['avgPerPerson'] ?? 0));
+        $servicios = $op['byService'] ?? [];
+        if (!empty($servicios)) {
+            $printer->setEmphasis(true);
+            $printer->text("Ventas por tipo de servicio\n");
+            $printer->setEmphasis($nb);
+            foreach ($servicios as $sv) {
+                $line('  ' . ($sv['name'] ?? '') . ' (' . (int) ($sv['orders'] ?? 0) . ')', $money($sv['sales'] ?? 0));
+            }
+        }
+        $cor = $op['courtesies'] ?? [];
+        $can = $op['cancellations'] ?? [];
+        $des = $op['discounts'] ?? [];
+        $printer->setEmphasis(true);
+        $printer->text("Cortesias\n");
+        $printer->setEmphasis($nb);
+        $line('  Platillos', $this->cantidadLimpia($cor['dishes'] ?? 0) . ' - ' . $money($cor['dishesAmount'] ?? 0));
+        $line('  Cuentas', (string) ($cor['accounts'] ?? 0));
+        $printer->setEmphasis(true);
+        $printer->text("Cancelaciones\n");
+        $printer->setEmphasis($nb);
+        $line('  Platillos', $this->cantidadLimpia($can['dishes'] ?? 0) . ' - ' . $money($can['dishesAmount'] ?? 0));
+        $line('  Cuentas anuladas', (int) ($can['accounts'] ?? 0) . ' - ' . $money($can['accountsAmount'] ?? 0));
+        $printer->setEmphasis(true);
+        $printer->text("Descuentos\n");
+        $printer->setEmphasis($nb);
+        $line('  Platillos', (int) ($des['dishes'] ?? 0) . ' - ' . $money($des['dishesAmount'] ?? 0));
+        $line('  Cuentas', (int) ($des['accounts'] ?? 0) . ' - ' . $money($des['accountsAmount'] ?? 0));
+    }
+
+    /** PROPINA POR FORMA DE PAGO (como Wansoft): una línea por método y el total. $metodos: [name, isCash, sales, tips]. */
+    private function imprimirPropinasPorMetodo($printer, array $metodos, int $W, bool $nb): void
+    {
+        $printer->setEmphasis(true);
+        $printer->text("PROPINA POR FORMA DE PAGO\n");
+        $printer->setEmphasis($nb);
+        $total = 0.0;
+        foreach ($metodos as $m) {
+            $this->printTwoColumnLine($printer, $this->ticketSinAcentos($m['name']), $this->formatMoney($m['tips']), $W);
+            $total += $m['tips'];
+        }
+        $printer->setEmphasis(true);
+        $this->printTwoColumnLine($printer, 'Total propina', $this->formatMoney($total), $W);
+        $printer->setEmphasis($nb);
+    }
+
+    /**
+     * CONTROL POR FORMA DE PAGO (como Wansoft). Efectivo: fondo + ventas + propina +/- movimientos = esperado, y el
+     * esperado menos las propinas cobradas con tarjeta (lo que queda después de pagárselas en efectivo a los meseros).
+     * Cada método que no es efectivo: ventas + propina = total. $efectivo null = sin fondo ni esperado (caja abierta).
+     * $metodos: [name, isCash, sales, tips].
+     */
+    private function imprimirControlPorMetodo($printer, array $metodos, ?array $efectivo, int $W, bool $nb): void
+    {
+        $line = function ($left, $right) use ($printer, $W) {
+            $this->printTwoColumnLine($printer, $this->ticketSinAcentos($left), $this->ticketSinAcentos($right), $W);
+        };
+        $bold = function ($left, $right) use ($printer, $line, $nb) {
+            $printer->setEmphasis(true);
+            $line($left, $right);
+            $printer->setEmphasis($nb);
+        };
+        $sub = function (string $s) use ($printer, $nb) {
+            $printer->setEmphasis(true);
+            $printer->text($this->ticketSinAcentos($s) . "\n");
+            $printer->setEmphasis($nb);
+        };
+        $money = fn ($v) => $this->formatMoney($v ?? 0);
+        $esEfectivo = fn (array $m) => !empty($m['isCash']) || stripos((string) $m['name'], 'efectivo') !== false;
+        $cash = array_values(array_filter($metodos, $esEfectivo));
+        $otros = array_values(array_filter($metodos, fn ($m) => !$esEfectivo($m)));
+        $ventasEf = array_sum(array_column($cash, 'sales'));
+        $propEf = array_sum(array_column($cash, 'tips'));
+        $propTarjeta = array_sum(array_column($otros, 'tips'));
+
+        $sub('CONTROL POR FORMA DE PAGO');
+        if (!empty($cash) || $efectivo !== null) {
+            $sub('Efectivo');
+            if ($efectivo !== null) $line('  Fondo de caja', $money($efectivo['fondo']));
+            $line('  (+) Por ventas', $money($ventasEf));
+            $line('  (+) Por propina', $money($propEf));
+            if ($efectivo !== null) {
+                $mov = (float) $efectivo['movimientos'];
+                $line('  (+/-) Movimientos', ($mov > 0 ? '+' : '') . $money($mov));
+                $bold('  Efectivo esperado', $money($efectivo['esperado']));
+                $line('  Esperado - propinas tarjeta', $money($efectivo['esperado'] - $propTarjeta));
+            } else {
+                $bold('  Total efectivo', $money($ventasEf + $propEf));
+            }
+        }
+        foreach ($otros as $m) {
+            $sub($m['name']);
+            $line('  (+) Por ventas', $money($m['sales']));
+            $line('  (+) Por propina', $money($m['tips']));
+            $bold('  Total ' . $m['name'], $money($m['sales'] + $m['tips']));
+        }
+    }
+
+    /**
+     * REPORTE DE VENTAS POR PRODUCTO (como el de platillos de Wansoft): cantidad, producto e importe, y al final el
+     * total de artículos. El backend ya manda los extras cobrados sumados a su producto. $ps: {items[{name,qty,amount}], totalQty, totalAmount}.
+     */
+    private function imprimirVentasPorProducto($printer, array $ps, int $W, bool $nb): void
+    {
+        $items = is_array($ps['items'] ?? null) ? $ps['items'] : [];
+        $printer->setEmphasis(true);
+        $printer->text("REPORTE DE VENTAS POR PRODUCTO\n");
+        $printer->setEmphasis($nb);
+        $wQ = 5;
+        $wM = 12;
+        $wN = max(8, $W - $wQ - $wM);
+        $printer->text(str_pad('Cant', $wQ) . str_pad('Producto', $wN) . str_pad('Importe', $wM, ' ', STR_PAD_LEFT) . "\n");
+        if (empty($items)) {
+            $printer->text("Sin ventas.\n");
+        }
+        foreach ($items as $it) {
+            $cant = $this->cantidadLimpia($it['qty'] ?? 0);
+            $importe = $this->formatMoney($it['amount'] ?? 0);
+            $lineas = $this->partirRenglon($this->ticketSinAcentos($it['name'] ?? ''), $wN - 1);
+            foreach ($lineas as $i => $l) {
+                $relleno = $wN - $this->mbLen($l);
+                if ($i === 0) {
+                    $printer->text(str_pad($cant, $wQ) . $l . str_repeat(' ', max(1, $relleno)) . str_pad($importe, $wM, ' ', STR_PAD_LEFT) . "\n");
+                } else {
+                    $printer->text(str_repeat(' ', $wQ) . $l . "\n");
+                }
+            }
+        }
+        $this->printTwoColumnLine($printer, 'Total de articulos', $this->cantidadLimpia($ps['totalQty'] ?? 0), $W);
+        $printer->setEmphasis(true);
+        $this->printTwoColumnLine($printer, 'Importe total', $this->formatMoney($ps['totalAmount'] ?? 0), $W);
+        $printer->setEmphasis($nb);
+    }
+
     private function ticketSinAcentos($s): string
     {
         return strtr((string) $s, [
@@ -2830,7 +3017,8 @@ class PrinterController
         }
 
         // ── Totales generales del consumo (cierre): sin impuestos, IVA y con impuestos ──
-        if ($cerrada && $op !== null && $V('totales_generales')) {
+        // Cierre: encendido por defecto. Reporte de caja abierta: lo enciende el restaurante (Estilo de tickets).
+        if ($op !== null && $V('totales_generales')) {
             $tot = $op['totals'] ?? [];
             $enParte($pT);
             $sectionTitle('TOTALES GENERALES');
@@ -2865,6 +3053,29 @@ class PrinterController
             $div($pd);
         }
 
+        // ── Propina por forma de pago / control por forma de pago (formato Wansoft; apagados por defecto) ──
+        $metodosControl = array_map(fn ($m) => [
+            'name' => (string) ($m['paymentMethodName'] ?? ''),
+            'isCash' => !empty($m['isCash']),
+            'sales' => (float) ($m['sales'] ?? 0),
+            'tips' => (float) ($m['tips'] ?? 0),
+        ], is_array($methods) ? $methods : []);
+        if (!empty($metodosControl) && $V('propinas_por_metodo')) {
+            $this->imprimirPropinasPorMetodo($printer, $metodosControl, $W, $nb);
+            $div($pd);
+        }
+        if (!empty($metodosControl) && $V('control_por_metodo')) {
+            /* Con la caja ABIERTA no salen el fondo ni el esperado (mismo criterio que «efectivo_esperado»): quien va a
+             * declarar su arqueo no debe ver contra qué número cuadrar. */
+            $efectivo = $cerrada ? [
+                'fondo' => (float) ($data['openingCash'] ?? 0),
+                'movimientos' => (float) ($movements['net'] ?? 0),
+                'esperado' => (float) ($data['expectedCash'] ?? 0),
+            ] : null;
+            $this->imprimirControlPorMetodo($printer, $metodosControl, $efectivo, $W, $nb);
+            $div($pd);
+        }
+
         // ── Movimientos de efectivo ──
         if ($V('movimientos_efectivo')) {
             $sectionTitle('MOVIMIENTOS DE EFECTIVO');
@@ -2888,42 +3099,15 @@ class PrinterController
             $div($pd);
         }
 
-        // ── Información operativa (cierre) ──
-        if ($cerrada && $op !== null && $V('info_operativa')) {
-            $sectionTitle('INFORMACION OPERATIVA');
-            $line('Cuentas cobradas', (string) ($op['orders'] ?? 0));
-            $line('Platillos', $this->cantidadLimpia($op['dishes'] ?? 0));
-            $line('Personas', (string) ($op['persons'] ?? 0));
-            $line('Prom. platillos / cuenta', $this->cantidadLimpia($op['avgDishesPerOrder'] ?? 0));
-            $line('Prom. $ / cuenta', $money($op['avgPerOrder'] ?? 0));
-            $line('Prom. $ / persona', $money($op['avgPerPerson'] ?? 0));
-            $servicios = $op['byService'] ?? [];
-            if (!empty($servicios)) {
-                $printer->setEmphasis(true);
-                $printer->text("Ventas por tipo de servicio\n");
-                $printer->setEmphasis($nb);
-                foreach ($servicios as $sv) {
-                    $line('  ' . ($sv['name'] ?? '') . ' (' . (int) ($sv['orders'] ?? 0) . ')', $money($sv['sales'] ?? 0));
-                }
-            }
-            $cor = $op['courtesies'] ?? [];
-            $can = $op['cancellations'] ?? [];
-            $des = $op['discounts'] ?? [];
-            $printer->setEmphasis(true);
-            $printer->text("Cortesias\n");
-            $printer->setEmphasis($nb);
-            $line('  Platillos', $this->cantidadLimpia($cor['dishes'] ?? 0) . ' - ' . $money($cor['dishesAmount'] ?? 0));
-            $line('  Cuentas', (string) ($cor['accounts'] ?? 0));
-            $printer->setEmphasis(true);
-            $printer->text("Cancelaciones\n");
-            $printer->setEmphasis($nb);
-            $line('  Platillos', $this->cantidadLimpia($can['dishes'] ?? 0) . ' - ' . $money($can['dishesAmount'] ?? 0));
-            $line('  Cuentas anuladas', (int) ($can['accounts'] ?? 0) . ' - ' . $money($can['accountsAmount'] ?? 0));
-            $printer->setEmphasis(true);
-            $printer->text("Descuentos\n");
-            $printer->setEmphasis($nb);
-            $line('  Platillos', (int) ($des['dishes'] ?? 0) . ' - ' . $money($des['dishesAmount'] ?? 0));
-            $line('  Cuentas', (int) ($des['accounts'] ?? 0) . ' - ' . $money($des['accountsAmount'] ?? 0));
+        // ── Información operativa (cierre: encendida por defecto; caja abierta: la enciende el restaurante) ──
+        if ($op !== null && $V('info_operativa')) {
+            $this->imprimirInfoOperativa($printer, $op, $W, $nb);
+            $div($pd);
+        }
+
+        // ── Reporte de ventas por producto (apagado por defecto) ──
+        if ($op !== null && is_array($op['productSales'] ?? null) && $V('ventas_por_producto')) {
+            $this->imprimirVentasPorProducto($printer, $op['productSales'], $W, $nb);
             $div($pd);
         }
 
