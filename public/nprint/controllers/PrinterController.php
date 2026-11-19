@@ -1432,9 +1432,10 @@ class PrinterController
                 $estatus = $this->safeSubstr((string) ($r['estatus'] ?? ''), 0, 11);
                 $importe = $this->formatMoney($r['total'] ?? 0);
                 // Relleno por caracteres (no bytes): nombres con acento no deben correr el importe.
-                $pad = fn(string $t, int $n) => $t . str_repeat(' ', max(0, $n - mb_strlen($t)));
+                // Sin `mb_strlen` directo: el PHP portátil de algunas PCs no trae mbstring («Call to undefined function»).
+                $pad = fn(string $t, int $n) => $t . str_repeat(' ', max(0, $n - $this->mbLen($t)));
                 $linea = $pad($folio, 8) . $pad($usuario, 17) . $pad($estatus, 12);
-                $printer->text($linea . str_pad($importe, max(1, $W - mb_strlen($linea)), ' ', STR_PAD_LEFT) . "\n");
+                $printer->text($linea . str_pad($importe, max(1, $W - $this->mbLen($linea)), ' ', STR_PAD_LEFT) . "\n");
                 if ($conProducto && !empty($r['producto'])) {
                     $cant = !empty($r['cantidad']) ? ((string) (0 + $r['cantidad'])) . ' ' : '';
                     $printer->text('  ' . $this->safeSubstr($cant . $r['producto'], 0, $W - 2) . "\n");
@@ -3445,7 +3446,11 @@ class PrinterController
         }
 
         /* ===== Formas de pago ===== */
-        $this->printFormaDePago($printer, $V('formas_pago') ? $pagos : [], $W, $pieP, $wPie, $wSep, $V('divisores'));
+        /* Formato tabla (Nombre · Monto · Propina · Cambio) y «Terminal: <caja>» solo existen en la nota de venta y la
+         * factura, y vienen APAGADOS: sin estilo o sin la clave, sale el desglosado de siempre. */
+        $conTabla = in_array($docType, ['nota_venta', 'factura'], true) && $V('formas_pago_tabla');
+        $terminal = in_array($docType, ['nota_venta', 'factura'], true) && $V('terminal') ? trim((string)($ord['terminal'] ?? '')) : '';
+        $this->printFormaDePago($printer, $V('formas_pago') ? $pagos : [], $W, $pieP, $wPie, $wSep, $V('divisores'), $conTabla, $terminal);
 
         /* Leyenda del restaurante al final de la cuenta (en la nota de venta va al final de su pie) */
         if ($docType === 'cuenta') $this->imprimirLeyenda($printer, $est, 'cuenta', $W, $pieP);
@@ -3457,40 +3462,46 @@ class PrinterController
         }
     }
 
-    /* Desglose de cómo se pagó: una línea por pago, separando propina.
-     * No imprime nada si no vienen pagos — así el ticket de cuenta previo al
-     * cobro no lleva este bloque. Ya NO imprime "TOTAL PAGADO": esa suma es el
-     * TOTAL grande de arriba y repetirla solo estorbaba. */
-    private function printFormaDePago($printer, array $pagos, int $W, ?array $pieP = null, ?int $wPie = null, ?int $wSep = null, bool $conLineas = true): void
+    /* Desglose de cómo se pagó.
+     * - Desglosado (por defecto): una línea por pago, separando propina «(PROPINA)».
+     * - Tabla ($conTabla): columnas Nombre · Monto · Propina · Cambio; la propina se junta en el renglón del pago del mismo
+     *   método y la misma persona, y el cambio (vuelto en efectivo, `pago.cambio`) va en su renglón.
+     * - $terminal: «Terminal: <caja>» al final del bloque (aunque no vengan pagos).
+     * No imprime nada si no vienen pagos ni terminal — así el ticket de cuenta previo al cobro no lleva este bloque. Ya NO
+     * imprime "TOTAL PAGADO": esa suma es el TOTAL grande de arriba y repetirla solo estorbaba. */
+    private function printFormaDePago($printer, array $pagos, int $W, ?array $pieP = null, ?int $wPie = null, ?int $wSep = null, bool $conLineas = true, bool $conTabla = false, string $terminal = ''): void
     {
-        if (empty($pagos)) return;
+        $pagos = array_values(array_filter($pagos, 'is_array'));
+        if (empty($pagos) && $terminal === '') return;
+        $ancho = $wPie ?? $W;
 
-        /* Con estilo, el título sigue en negrita y centrado a tamaño normal; los renglones usan el estilo del pie */
-        if ($pieP !== null) $printer->setTextSize(1, 1);
-        $printer->setEmphasis(true);
-        $printer->setJustification(Printer::JUSTIFY_CENTER);
-        $printer->text("FORMAS DE PAGO\n");
-        $printer->setJustification(Printer::JUSTIFY_LEFT);
-        $printer->setEmphasis(false);
-        if ($pieP !== null) \App\Support\EstiloTicket::fijar($printer, $pieP);
+        if (!empty($pagos)) {
+            /* Con estilo, el título sigue en negrita y centrado a tamaño normal; los renglones usan el estilo del pie */
+            if ($pieP !== null) $printer->setTextSize(1, 1);
+            $printer->setEmphasis(true);
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            $printer->text("FORMAS DE PAGO\n");
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+            $printer->setEmphasis(false);
+            if ($pieP !== null) \App\Support\EstiloTicket::fijar($printer, $pieP);
 
-        foreach ($pagos as $pago) {
-            if (!is_array($pago)) continue;
+            if ($conTabla) {
+                $this->imprimirFormasDePagoEnTabla($printer, $pagos, $ancho);
+            } else {
+                foreach ($pagos as $pago) {
+                    $etiqueta = $this->etiquetaDePago($pago);
+                    if (strtoupper((string)($pago['tipo'] ?? 'SALE')) === 'TIP') $etiqueta .= ' (PROPINA)';
+                    $this->printTwoColumnLine($printer, $etiqueta, $this->formatMoney((float)($pago['monto'] ?? 0)), $ancho);
+                }
+            }
+        } elseif ($pieP !== null) {
+            \App\Support\EstiloTicket::fijar($printer, $pieP);
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+        }
 
-            $metodo = trim((string)($pago['metodo'] ?? ''));
-            if ($metodo === '') $metodo = 'Otro';
-            $monto = (float)($pago['monto'] ?? 0);
-            $esPropina = strtoupper((string)($pago['tipo'] ?? 'SALE')) === 'TIP';
-
-            /* El nombre solo aparece cuando la cuenta se dividió por persona:
-             * es lo que permite reclamar "yo pagué mi parte con tarjeta". */
-            $payerName = trim((string)($pago['payerName'] ?? ''));
-
-            $etiqueta = $metodo;
-            if ($payerName !== '') $etiqueta .= ' - ' . $payerName;
-            if ($esPropina) $etiqueta .= ' (PROPINA)';
-
-            $this->printTwoColumnLine($printer, $etiqueta, $this->formatMoney($monto), $wPie ?? $W);
+        if ($terminal !== '') {
+            if (!empty($pagos)) $printer->text(str_repeat('-', $ancho) . "\n");
+            $this->printTwoColumnLine($printer, 'Terminal:', $terminal, $ancho);
         }
 
         if ($pieP !== null) {
@@ -3500,6 +3511,81 @@ class PrinterController
         }
         if ($conLineas) $printer->text(str_repeat('=', $wSep ?? $W) . "\n");
         else \App\Support\EstiloTicket::espacioSinDivisoria($printer);
+    }
+
+    /* «Método» o «Método - Persona». El nombre solo aparece cuando la cuenta se dividió por persona: es lo que permite
+     * reclamar "yo pagué mi parte con tarjeta". */
+    private function etiquetaDePago(array $pago): string
+    {
+        $metodo = trim((string)($pago['metodo'] ?? ''));
+        if ($metodo === '') $metodo = 'Otro';
+        $payerName = trim((string)($pago['payerName'] ?? ''));
+        return $payerName !== '' ? $metodo . ' - ' . $payerName : $metodo;
+    }
+
+    /* Renglones de la tabla de formas de pago: cada venta con su propina (mismo método y misma persona) y su cambio.
+     * Una propina sin venta que la acompañe sale en su propio renglón con monto $0.00. Devuelve
+     * [[etiqueta, monto, propina, cambio], ...]. Público y estático para probarlo sin impresora. */
+    public static function renglonesFormasDePago(array $pagos): array
+    {
+        $filas = [];
+        $clave = function (array $p): string {
+            return strtolower(trim((string)($p['metodo'] ?? '')) . '|' . trim((string)($p['payerName'] ?? '')));
+        };
+        $propinas = [];
+        foreach ($pagos as $p) {
+            if (!is_array($p)) continue;
+            if (strtoupper((string)($p['tipo'] ?? 'SALE')) === 'TIP') { $propinas[] = $p; continue; }
+            $filas[] = ['p' => $p, 'k' => $clave($p), 'monto' => (float)($p['monto'] ?? 0), 'propina' => 0.0, 'cambio' => (float)($p['cambio'] ?? 0), 'conPropina' => false];
+        }
+        foreach ($propinas as $t) {
+            $k = $clave($t);
+            $asignada = false;
+            foreach ($filas as &$f) {
+                if (!$f['conPropina'] && $f['k'] === $k) {
+                    $f['propina'] += (float)($t['monto'] ?? 0);
+                    $f['conPropina'] = true;
+                    $asignada = true;
+                    break;
+                }
+            }
+            unset($f);
+            if (!$asignada) {
+                $filas[] = ['p' => $t, 'k' => $k, 'monto' => 0.0, 'propina' => (float)($t['monto'] ?? 0), 'cambio' => 0.0, 'conPropina' => true];
+            }
+        }
+        $out = [];
+        foreach ($filas as $f) {
+            $metodo = trim((string)($f['p']['metodo'] ?? ''));
+            if ($metodo === '') $metodo = 'Otro';
+            $payer = trim((string)($f['p']['payerName'] ?? ''));
+            $out[] = [$payer !== '' ? $metodo . ' - ' . $payer : $metodo, $f['monto'], $f['propina'], max(0.0, $f['cambio'])];
+        }
+        return $out;
+    }
+
+    private function imprimirFormasDePagoEnTabla($printer, array $pagos, int $ancho): void
+    {
+        /* Tres columnas de dinero de 10 y el resto para el nombre (12 con papel de 42). */
+        $wNum = 10;
+        $wNom = max(6, $ancho - 3 * $wNum);
+        $num = function ($v) use ($wNum): string {
+            return str_pad($this->formatMoney($v), $wNum, ' ', STR_PAD_LEFT);
+        };
+        $printer->text(str_pad('Nombre', $wNom) . str_pad('Monto', $wNum, ' ', STR_PAD_LEFT) . str_pad('Propina', $wNum, ' ', STR_PAD_LEFT) . str_pad('Cambio', $wNum, ' ', STR_PAD_LEFT) . "\n");
+        $printer->text(str_repeat('-', $ancho) . "\n");
+        foreach (self::renglonesFormasDePago($pagos) as [$etiqueta, $monto, $propina, $cambio]) {
+            $montos = $num($monto) . $num($propina) . $num($cambio);
+            $largo = function_exists('mb_strlen') ? mb_strlen($etiqueta, 'UTF-8') : strlen($etiqueta);
+            if ($largo <= $wNom - 1) {
+                $relleno = str_repeat(' ', $wNom - $largo);
+                $printer->text($etiqueta . $relleno . $montos . "\n");
+            } else {
+                /* El nombre no cabe: va en su propio renglón y los montos debajo */
+                $printer->text($etiqueta . "\n");
+                $printer->text(str_repeat(' ', $wNom) . $montos . "\n");
+            }
+        }
     }
 
     /**
@@ -4581,8 +4667,11 @@ class PrinterController
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
 
-                    /* (1) Ticket consolidado de la cuenta */
-                    $this->renderConsolidatedTicket($printer, $data, $isFinal);
+                    /* (1) Ticket consolidado de la cuenta. Con `soloVouchers` (cobro dividido de las apps nuevas) no sale:
+                     * el ticket de la cuenta ya es la nota de venta normal, y aquí solo van los tickets por persona. */
+                    if (!($isFinal && !empty($data['soloVouchers']))) {
+                        $this->renderConsolidatedTicket($printer, $data, $isFinal);
+                    }
 
                     /* (2) N vouchers individuales — uno por persona */
                     $orderTotal = (float)($data['totales']['total'] ?? 0);
