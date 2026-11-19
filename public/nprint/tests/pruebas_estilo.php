@@ -110,6 +110,8 @@ require __DIR__ . '/pruebas_total_descuentos.php';
 require __DIR__ . '/pruebas_agrupar_comanda.php';
 // Cortes con formato Wansoft (reporte de caja, cierre de caja y reporte de turno; secciones apagadas por defecto)
 require __DIR__ . '/pruebas_cortes_wansoft.php';
+// Formas de pago en tabla y Terminal (nota de venta y factura; apagados por defecto)
+require __DIR__ . '/pruebas_formas_pago_estilo.php';
 
 // el catálogo completo de los 11 tipos tiene prueba (salvo los de comanda/antro, que se cubren abajo)
 $pendientes = [];
