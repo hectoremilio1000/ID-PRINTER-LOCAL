@@ -36,6 +36,7 @@ $partesConContenido = [
     'corte_x' => ['titulo', 'encabezado', 'detalle', 'totales'],
     'reporte_caja' => ['titulo', 'encabezado', 'detalle', 'totales', 'pie'],
     'cierre_caja' => ['titulo', 'encabezado', 'detalle', 'totales', 'pie'],
+    'corte_mesero' => ['titulo', 'encabezado', 'detalle', 'totales', 'pie'],
 ];
 foreach ($partesConContenido as $nombre => $partes) {
     $base = snap($nombre);
@@ -80,6 +81,11 @@ $matriz = [
         'totales_generales' => 'TOTALES GENERALES', 'ventas_por_metodo' => 'VENTAS POR METODO', 'conciliacion_por_metodo' => '  Declarado', 'movimientos_efectivo' => 'MOVIMIENTOS DE EFECTIVO',
         'info_operativa' => 'INFORMACION OPERATIVA', 'operadores' => 'OPERADORES', 'declaraciones_personales' => 'DECLARACIONES PERSONALES', 'resumen_final' => 'Venta bruta', 'pie_impreso' => 'Impreso:',
     ], ['titulo' => 'CIERRE DE CAJA']],
+    ['corte_mesero', 'corte_mesero', [
+        'restaurante' => 'RESTAURANTE LAB', 'fecha' => '/Fecha: +13\/11\/2026/', 'turno' => '/Turno: +140/', 'totales_generales' => 'TOTALES GENERALES',
+        'ventas_forma_pago' => 'VENTAS POR FORMA DE PAGO', 'propina_forma_pago' => 'PROPINA POR FORMA DE PAGO', 'control_forma_pago' => 'CONTROL POR FORMA DE PAGO',
+        'info_operativa' => 'Total de Ordenes:', 'desglose_operativo' => 'Ventas en mesa:', 'totales_seccion' => 'Total Propina:', 'fecha_impresion' => 'Fecha impresion:',
+    ], ['titulo' => 'Reporte Corte Mesero', 'mesero' => '/Mesero: +ANA LOPEZ/']],
 ];
 $cubiertos = []; // doc => [key => true], para comprobar que el catálogo entero está probado
 foreach ($matriz as [$doc, $caso, $marcas, $obl]) {
@@ -102,6 +108,11 @@ foreach ($matriz as [$doc, $caso, $marcas, $obl]) {
         $ok(contiene($out, $m), "obligatorio $doc.$key=false se ignora y sigue saliendo «{$m}»: $caso");
     }
 }
+// Corte por mesero angosto (32 columnas): ningún renglón del desglose pierde su cantidad ni su importe.
+$cm32 = sinFormato(correr($ctrl, $casos['corte_mesero'], V2([], [], ['columnas' => 32])));
+$ok(contiene($cm32, '/Cortesias en Platillos: 1 +\$80\.00/') && contiene($cm32, "/Cancelaciones de Cuentas:\n +1 +\\$650\.00/"), 'corte_mesero a 32 columnas conserva cantidad e importe del desglose');
+$ok(!contiene($cm32, '/^.{33,}$/m'), 'corte_mesero a 32 columnas: ningún renglón pasa de 32');
+
 // Tickets de TACO CAPITAL: fecha/hora separadas, leyenda, divisores y comensales (marcan sus campos en $cubiertos)
 require __DIR__ . '/pruebas_tickets_taco.php';
 // Línea «TOTAL DESCUENTOS» (campo total_descuentos)

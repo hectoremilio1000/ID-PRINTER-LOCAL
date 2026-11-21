@@ -1452,6 +1452,193 @@ class PrinterController
     }
 
     /**
+     * Cuerpo del «Reporte Corte Mesero» (separado de la ruta para probarlo sin impresora). Un ticket por mesero.
+     *
+     * Estilo v2 (data.style, «Estilo de tickets» › Corte por mesero, 2026-11-20): titulo («Reporte Corte Mesero»),
+     * encabezado (restaurante, Fecha, Turno, Mesero), detalle (renglones y títulos de sección), totales (el renglón
+     * de total de cada sección), pie (Fecha impresion). Los campos apagan secciones enteras. Sin estilo sale byte por
+     * byte como siempre (golden corte_mesero).
+     */
+    private function renderCorteMeseroBody($printer, array $data, array $meseros): void
+    {
+        $this->iniciarTicket($printer);
+        $W = 48;
+        $est = \App\Support\EstiloTicket::normalizar($data);
+        $V = fn(string $k) => \App\Support\EstiloTicket::visible($est, 'corte_mesero', $k);
+        $pt = $pe = $pd = $pT = $pp = null;
+        $wSep = $wEnc = $wDet = $wTot = $W;
+        if ($est !== null) {
+            $wSep = $est['columnas'] ?? $W;
+            $pt = \App\Support\EstiloTicket::parte($est, 'titulo', ['ancho' => 1, 'alto' => 2, 'negrita' => true, 'alineacion' => 'centro']);
+            $pe = \App\Support\EstiloTicket::parte($est, 'encabezado', ['ancho' => 1, 'alto' => 1, 'negrita' => false, 'alineacion' => 'centro']);
+            $pd = \App\Support\EstiloTicket::parte($est, 'detalle', ['ancho' => 1, 'alto' => 1, 'negrita' => false, 'alineacion' => 'izq']);
+            $pT = \App\Support\EstiloTicket::parte($est, 'totales', ['ancho' => 1, 'alto' => 1, 'negrita' => true, 'alineacion' => 'izq']);
+            $pp = \App\Support\EstiloTicket::parte($est, 'pie', ['ancho' => 1, 'alto' => 1, 'negrita' => false, 'alineacion' => 'izq']);
+            $wEnc = \App\Support\EstiloTicket::columnasEfectivas($wSep, $pe['ancho']);
+            $wDet = \App\Support\EstiloTicket::columnasEfectivas($wSep, $pd['ancho']);
+            $wTot = \App\Support\EstiloTicket::columnasEfectivas($wSep, $pT['ancho']);
+        }
+        $fx = function (?array $p) use ($printer) {
+            if ($p !== null) \App\Support\EstiloTicket::fijar($printer, $p);
+        };
+        $m = fn($v) => $this->formatMoney($v);
+        $n = fn($v) => is_numeric($v) ? rtrim(rtrim(number_format((float) $v, 2, '.', ''), '0'), '.') : '0';
+        // La raya siempre va 1x1 a todo el ancho; con estilo regresa al formato de la parte que sigue.
+        $raya = function (?array $vuelve = null) use ($printer, $est, $wSep, $fx) {
+            if ($est !== null) {
+                $printer->setTextSize(1, 1);
+                $printer->setEmphasis(false);
+                $printer->setJustification(Printer::JUSTIFY_LEFT);
+            }
+            $printer->text(str_repeat('-', $wSep) . "\n");
+            $fx($vuelve);
+        };
+        $seccion = function (string $t) use ($printer, $raya, $est, $pd, $fx) {
+            $raya($pd);
+            $printer->setJustification(Printer::JUSTIFY_CENTER);
+            $printer->setEmphasis(true);
+            $printer->text($t . "\n");
+            $printer->setEmphasis(false);
+            $printer->setJustification(Printer::JUSTIFY_LEFT);
+            $raya($pd);
+        };
+        $enc = fn(string $l, string $r) => $this->printTwoColumnLine($printer, $l, $r, $wEnc);
+        $dos = fn(string $l, string $r) => $this->printTwoColumnLine($printer, $l, $r, $wDet);
+        $conTotales = $V('totales_seccion');
+        $fuerte = function (string $l, string $r) use ($printer, $est, $fx, $pT, $pd, $wTot, $conTotales) {
+            if (!$conTotales) return;
+            if ($est === null) {
+                $printer->setEmphasis(true);
+                $this->printTwoColumnLine($printer, $l, $r, $wTot);
+                $printer->setEmphasis(false);
+                return;
+            }
+            $fx($pT);
+            $this->printTwoColumnLine($printer, $l, $r, $wTot);
+            $fx($pd);
+        };
+        // «Etiqueta  N  $monto»: la cantidad en su columna, el importe a la derecha (32 + 4 a 48 columnas, como hoy).
+        // Más angosto (estilo con menos columnas o letra más ancha) la columna fija ya no cabe: la cantidad va pegada
+        // a la etiqueta y, si ni así cabe, la etiqueta baja sola y la cantidad con el importe van en el renglón de abajo.
+        $tres = function (string $l, $c) use ($printer, $dos, $m, $n, $wDet) {
+            $c = is_array($c) ? $c : [];
+            $cant = $n($c['cantidad'] ?? 0);
+            $imp = $m($c['monto'] ?? 0);
+            if ($wDet >= 48) {
+                $dos(str_pad($l, 32) . str_pad($cant, 4, ' ', STR_PAD_LEFT), $imp);
+            } elseif (strlen($l) + 1 + strlen($cant) + 1 + strlen($imp) <= $wDet) {
+                $dos($l . ' ' . $cant, $imp);
+            } else {
+                $printer->text($l . "\n");
+                $dos('  ' . $cant, $imp);
+            }
+        };
+        $subtitulo = function (string $t) use ($printer) {
+            $printer->setEmphasis(true);
+            $printer->text($t . "\n");
+            $printer->setEmphasis(false);
+        };
+
+        foreach ($meseros as $ms) {
+            $tot = $ms['totales'] ?? [];
+            $ven = $ms['ventas'] ?? [];
+            $pro = $ms['propinas'] ?? [];
+            $ctl = $ms['control'] ?? [];
+            $op = $ms['operativa'] ?? [];
+
+            if ($est === null) {
+                $printer->setJustification(Printer::JUSTIFY_CENTER);
+                $printer->setEmphasis(true);
+                $printer->setTextSize(1, 2);
+                $printer->text("Reporte Corte Mesero\n");
+                $printer->setTextSize(1, 1);
+                $printer->setEmphasis(false);
+            } else {
+                $fx($pt);
+                $printer->text("Reporte Corte Mesero\n");
+                $fx($pe);
+            }
+            if (!empty($data['restaurante']) && $V('restaurante')) $printer->text($data['restaurante'] . "\n");
+            if ($est === null) $printer->setJustification(Printer::JUSTIFY_LEFT);
+            $raya($pe);
+            if (!empty($data['periodo']) && $V('fecha')) $enc('Fecha:', (string) $data['periodo']);
+            if (!empty($data['turno']) && $V('turno')) $enc('Turno:', (string) $data['turno']);
+            $enc('Mesero:', strtoupper((string) ($ms['waiterName'] ?? '')));
+
+            if ($V('totales_generales')) {
+                $seccion('TOTALES GENERALES');
+                $dos('Total de Venta s/Impts', $m($tot['ventaSinImpuestos'] ?? 0));
+                $dos('IVA', $m($tot['iva'] ?? 0));
+                $fuerte('Total de Venta c/Impts', $m($tot['ventaConImpuestos'] ?? 0));
+            }
+
+            if ($V('ventas_forma_pago')) {
+                $seccion('VENTAS POR FORMA DE PAGO');
+                $dos('Efectivo', $m($ven['efectivo'] ?? 0));
+                $dos('Tarjeta', $m($ven['tarjeta'] ?? 0));
+                $fuerte('Total Ventas:', $m($ven['total'] ?? 0));
+            }
+
+            if ($V('propina_forma_pago')) {
+                $seccion('PROPINA POR FORMA DE PAGO');
+                $dos('Efectivo', $m($pro['efectivo'] ?? 0));
+                $dos('Tarjeta', $m($pro['tarjeta'] ?? 0));
+                $fuerte('Total Propina:', $m($pro['total'] ?? 0));
+            }
+
+            if ($V('control_forma_pago')) {
+                $seccion('CONTROL POR FORMA DE PAGO');
+                foreach (['efectivo' => 'Efectivo', 'tarjeta' => 'Tarjeta'] as $k => $titulo) {
+                    $c = $ctl[$k] ?? [];
+                    $subtitulo($titulo);
+                    $dos('(+) Por Ventas:', $m($c['ventas'] ?? 0));
+                    $dos('(+) Por Propina:', $m($c['propina'] ?? 0));
+                    $fuerte('Total ' . $titulo . ':', $m($c['total'] ?? 0));
+                }
+            }
+
+            $info = $V('info_operativa');
+            $desglose = $V('desglose_operativo');
+            if ($info || $desglose) $seccion('INFORMACION OPERATIVA');
+            if ($info) {
+                $dos('Total de Ordenes:', $n($op['ordenes'] ?? 0));
+                $dos('Total de Platillos:', $n($op['platillos'] ?? 0));
+                $dos('Total de Personas:', $n($op['personas'] ?? 0));
+                $dos('Promedio platillos / orden:', $n($op['promPlatillosPorOrden'] ?? 0));
+                $dos('Promedio $ / orden:', $m($op['promPorOrden'] ?? 0));
+                $dos('Promedio $ / persona:', $m($op['promPorPersona'] ?? 0));
+            }
+            if ($info && $desglose) $printer->feed(1);
+            if ($desglose) {
+                $tres('Ventas en mesa:', $op['ventasEnMesa'] ?? null);
+                $tres('Ventas a domicilio:', $op['ventasADomicilio'] ?? null);
+                $tres('Ventas para llevar:', $op['ventasParaLlevar'] ?? null);
+                $tres('Cortesias en Cuentas:', $op['cortesiasEnCuentas'] ?? null);
+                $tres('Cortesias en Platillos:', $op['cortesiasEnPlatillos'] ?? null);
+                $tres('Cancelaciones de Cuentas:', $op['cancelacionesDeCuentas'] ?? null);
+                $tres('Anulaciones en Platillos:', $op['anulacionesEnPlatillos'] ?? null);
+                $tres('Descuentos en Cuentas:', $op['descuentosEnCuentas'] ?? null);
+                $tres('Descuentos en Platillos:', $op['descuentosEnPlatillos'] ?? null);
+            }
+            $raya($pp);
+            if ($V('fecha_impresion')) {
+                $linea = 'Fecha impresion: ' . date('d/m/Y H:i:s');
+                $wPie = $pp !== null ? \App\Support\EstiloTicket::columnasEfectivas($wSep, $pp['ancho']) : $W;
+                // 36 caracteres: a 48 columnas cabe como siempre; más angosto, la fecha baja a su propio renglón.
+                $printer->text(strlen($linea) <= $wPie ? $linea . "\n" : "Fecha impresion:\n" . date('d/m/Y H:i:s') . "\n");
+            }
+            if ($est !== null) {
+                $printer->setTextSize(1, 1);
+                $printer->setEmphasis(false);
+                $printer->setJustification(Printer::JUSTIFY_LEFT);
+            }
+            if (\App\Support\EstiloTicket::esPrueba($data)) \App\Support\EstiloTicket::imprimirPrueba($printer, $est);
+            $printer->feed(3);
+            $printer->cut();
+        }
+    }
+
+    /**
      * REPORTE CORTE MESERO (Symphonie, 2026-11-13) — como el de SoftRestaurant, sin IEPS/DXU/Megapuntos/anticipos.
      * POST /printers/print-corte-mesero
      *
@@ -1494,100 +1681,7 @@ class PrinterController
                 try {
                     $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
-                    $this->iniciarTicket($printer);
-                    $W = 48;
-                    $m = fn($v) => $this->formatMoney($v);
-                    $n = fn($v) => is_numeric($v) ? rtrim(rtrim(number_format((float) $v, 2, '.', ''), '0'), '.') : '0';
-                    $raya = fn() => $printer->text(str_repeat('-', $W) . "\n");
-                    $seccion = function (string $t) use ($printer, $raya) {
-                        $raya();
-                        $printer->setJustification(Printer::JUSTIFY_CENTER);
-                        $printer->setEmphasis(true);
-                        $printer->text($t . "\n");
-                        $printer->setEmphasis(false);
-                        $printer->setJustification(Printer::JUSTIFY_LEFT);
-                        $raya();
-                    };
-                    $dos = fn(string $l, string $r) => $this->printTwoColumnLine($printer, $l, $r, $W);
-                    $fuerte = function (string $l, string $r) use ($printer, $dos) {
-                        $printer->setEmphasis(true);
-                        $dos($l, $r);
-                        $printer->setEmphasis(false);
-                    };
-                    // «Etiqueta  N  $monto»: la cantidad en su columna, el importe a la derecha.
-                    $tres = function (string $l, $c) use ($dos, $m, $n) {
-                        $c = is_array($c) ? $c : [];
-                        $dos(str_pad($l, 32) . str_pad($n($c['cantidad'] ?? 0), 4, ' ', STR_PAD_LEFT), $m($c['monto'] ?? 0));
-                    };
-
-                    foreach ($meseros as $ms) {
-                        $tot = $ms['totales'] ?? [];
-                        $ven = $ms['ventas'] ?? [];
-                        $pro = $ms['propinas'] ?? [];
-                        $ctl = $ms['control'] ?? [];
-                        $op = $ms['operativa'] ?? [];
-
-                        $printer->setJustification(Printer::JUSTIFY_CENTER);
-                        $printer->setEmphasis(true);
-                        $printer->setTextSize(1, 2);
-                        $printer->text("Reporte Corte Mesero\n");
-                        $printer->setTextSize(1, 1);
-                        $printer->setEmphasis(false);
-                        if (!empty($data['restaurante'])) $printer->text($data['restaurante'] . "\n");
-                        $printer->setJustification(Printer::JUSTIFY_LEFT);
-                        $raya();
-                        if (!empty($data['periodo'])) $dos('Fecha:', (string) $data['periodo']);
-                        if (!empty($data['turno'])) $dos('Turno:', (string) $data['turno']);
-                        $dos('Mesero:', strtoupper((string) ($ms['waiterName'] ?? '')));
-
-                        $seccion('TOTALES GENERALES');
-                        $dos('Total de Venta s/Impts', $m($tot['ventaSinImpuestos'] ?? 0));
-                        $dos('IVA', $m($tot['iva'] ?? 0));
-                        $fuerte('Total de Venta c/Impts', $m($tot['ventaConImpuestos'] ?? 0));
-
-                        $seccion('VENTAS POR FORMA DE PAGO');
-                        $dos('Efectivo', $m($ven['efectivo'] ?? 0));
-                        $dos('Tarjeta', $m($ven['tarjeta'] ?? 0));
-                        $fuerte('Total Ventas:', $m($ven['total'] ?? 0));
-
-                        $seccion('PROPINA POR FORMA DE PAGO');
-                        $dos('Efectivo', $m($pro['efectivo'] ?? 0));
-                        $dos('Tarjeta', $m($pro['tarjeta'] ?? 0));
-                        $fuerte('Total Propina:', $m($pro['total'] ?? 0));
-
-                        $seccion('CONTROL POR FORMA DE PAGO');
-                        foreach (['efectivo' => 'Efectivo', 'tarjeta' => 'Tarjeta'] as $k => $titulo) {
-                            $c = $ctl[$k] ?? [];
-                            $printer->setEmphasis(true);
-                            $printer->text($titulo . "\n");
-                            $printer->setEmphasis(false);
-                            $dos('(+) Por Ventas:', $m($c['ventas'] ?? 0));
-                            $dos('(+) Por Propina:', $m($c['propina'] ?? 0));
-                            $fuerte('Total ' . $titulo . ':', $m($c['total'] ?? 0));
-                        }
-
-                        $seccion('INFORMACION OPERATIVA');
-                        $dos('Total de Ordenes:', $n($op['ordenes'] ?? 0));
-                        $dos('Total de Platillos:', $n($op['platillos'] ?? 0));
-                        $dos('Total de Personas:', $n($op['personas'] ?? 0));
-                        $dos('Promedio platillos / orden:', $n($op['promPlatillosPorOrden'] ?? 0));
-                        $dos('Promedio $ / orden:', $m($op['promPorOrden'] ?? 0));
-                        $dos('Promedio $ / persona:', $m($op['promPorPersona'] ?? 0));
-                        $printer->feed(1);
-                        $tres('Ventas en mesa:', $op['ventasEnMesa'] ?? null);
-                        $tres('Ventas a domicilio:', $op['ventasADomicilio'] ?? null);
-                        $tres('Ventas para llevar:', $op['ventasParaLlevar'] ?? null);
-                        $tres('Cortesias en Cuentas:', $op['cortesiasEnCuentas'] ?? null);
-                        $tres('Cortesias en Platillos:', $op['cortesiasEnPlatillos'] ?? null);
-                        $tres('Cancelaciones de Cuentas:', $op['cancelacionesDeCuentas'] ?? null);
-                        $tres('Anulaciones en Platillos:', $op['anulacionesEnPlatillos'] ?? null);
-                        $tres('Descuentos en Cuentas:', $op['descuentosEnCuentas'] ?? null);
-                        $tres('Descuentos en Platillos:', $op['descuentosEnPlatillos'] ?? null);
-                        $raya();
-                        $printer->text('Fecha impresion: ' . date('d/m/Y H:i:s') . "\n");
-                        $printer->feed(3);
-                        $printer->cut();
-                    }
+                    $this->renderCorteMeseroBody($printer, $data, $meseros);
 
                     $this->repetirCopias($connector, $data);
                     $printer->close();

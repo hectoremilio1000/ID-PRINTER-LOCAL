@@ -221,5 +221,20 @@ final class CatalogoTicket
             'pagada_pendiente' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
             'total_comision' => ['parte' => 'totales', 'def' => true, 'obl' => true],
         ],
+        'corte_mesero' => [
+            'titulo' => ['parte' => 'titulo', 'def' => true, 'obl' => true],
+            'restaurante' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
+            'fecha' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
+            'turno' => ['parte' => 'encabezado', 'def' => true, 'obl' => false],
+            'mesero' => ['parte' => 'encabezado', 'def' => true, 'obl' => true],
+            'totales_generales' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'ventas_forma_pago' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'propina_forma_pago' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'control_forma_pago' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'info_operativa' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'desglose_operativo' => ['parte' => 'detalle', 'def' => true, 'obl' => false],
+            'totales_seccion' => ['parte' => 'totales', 'def' => true, 'obl' => false],
+            'fecha_impresion' => ['parte' => 'pie', 'def' => true, 'obl' => false],
+        ],
     ];
 }
