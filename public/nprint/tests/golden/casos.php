@@ -75,4 +75,22 @@ return [
             'discounts' => ['dishes' => 3, 'dishesAmount' => 45, 'accounts' => 2, 'accountsAmount' => 20],
         ],
     ]))]],
+    // ── corte por mesero (Symphonie): dos meseros = dos tickets cortados ──
+    'corte_mesero' => ['ep' => 'printCorteMesero', 'doc' => 'corte_mesero', 'jobs' => [$job([
+        'restaurante' => 'RESTAURANTE LAB', 'periodo' => '13/11/2026', 'turno' => '140',
+        'meseros' => array_map(fn(string $nombre) => [
+            'waiterId' => 6, 'waiterName' => $nombre,
+            'totales' => ['ventaSinImpuestos' => 19168.10, 'iva' => 3066.90, 'ventaConImpuestos' => 22235],
+            'ventas' => ['efectivo' => 1200, 'tarjeta' => 21035, 'total' => 22235],
+            'propinas' => ['efectivo' => 150, 'tarjeta' => 3814.5, 'total' => 3964.5],
+            'control' => ['efectivo' => ['ventas' => 1200, 'propina' => 150, 'total' => 1350], 'tarjeta' => ['ventas' => 21035, 'propina' => 3814.5, 'total' => 24849.5]],
+            'operativa' => [
+                'ordenes' => 7, 'platillos' => 103, 'personas' => 16, 'promPlatillosPorOrden' => 14.71, 'promPorOrden' => 3176.43, 'promPorPersona' => 1389.69,
+                'ventasEnMesa' => ['cantidad' => 7, 'monto' => 22235], 'ventasADomicilio' => ['cantidad' => 0, 'monto' => 0], 'ventasParaLlevar' => ['cantidad' => 0, 'monto' => 0],
+                'cortesiasEnCuentas' => ['cantidad' => 0, 'monto' => 0], 'cortesiasEnPlatillos' => ['cantidad' => 1, 'monto' => 80],
+                'cancelacionesDeCuentas' => ['cantidad' => 1, 'monto' => 650], 'anulacionesEnPlatillos' => ['cantidad' => 2, 'monto' => 650],
+                'descuentosEnCuentas' => ['cantidad' => 1, 'monto' => 50], 'descuentosEnPlatillos' => ['cantidad' => 0, 'monto' => 0],
+            ],
+        ], ['Ana Lopez', 'Luis Perez']),
+    ])]],
 ];
